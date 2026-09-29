@@ -1,4 +1,4 @@
-baseURL = 'https://example.org/'
+baseURL = 'https://bitsig.dev'
 locale = 'en-us'
 title = 'BitSIG'
 [caches]
