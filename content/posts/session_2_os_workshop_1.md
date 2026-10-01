@@ -20,13 +20,18 @@ We also use supplementary materials, like the CS216 guide to x86 assembly from t
 
 **Furthermore, the majority of the content of these workshops will be written assuming a Linux host machine in mind. We can assist with some differences in distros, but we'd ask that if you follow this guide with a macOS or Windows system, you should use a Linux VM (like WSL).**
 
+## Session Content:
+Empty at the moment - check back later!
+
 # A minimal multiboot Rust Kernel
 
 We'll be going into how to create a minimal x86 OS kernel with the Multiboot standard. For now, all we want is to get `OK` to print to the screen. But before we can get into doing any of that, we need to understand how a computer boots.
 
 ## Booting sequence
 
-When a computer switches on, it loads the **BIOS** (Basic Input/Output System) from some special flash memory. The BIOS will run self-test and hardware initializations and then looks for bootable devices (HDDs, USBs, etc.). *In the case of B.O.C., this is usually a USB since B.O.C currently has no HDD or SSD!*. Once a bootbale device is found, the **bootloader** takes control which has to determine the location of the kernel image on the bootable device and load it into memory. The bootloader also needs to switch the CPU into **'protected mode'** as all x86 CPUs start in the limited **'real mode'** by default (for old computers compatibility). To give you an idea, real mode generally has access to about 1MB of physical RAM because of how it does addressing, while protected mode can do up to 4GB in 32-bit addressing (and more in 64 bit via extension).
+When a computer switches on, it loads the **BIOS** (Basic Input/Output System) from some special flash memory. The BIOS will run self-test and hardware initializations and then looks for bootable devices (HDDs, USBs, etc.). *In the case of B.O.C., this is usually a USB since B.O.C currently has no HDD or SSD!* Once a bootable device is found, the **bootloader** takes control which has to determine the location of the kernel image on the bootable device and load it into memory. The bootloader also needs to switch the CPU into **'protected mode'** as all x86 CPUs start in the limited **'real mode'** by default (for old computers compatibility). To give you an idea, real mode generally has access to about 1MB of physical RAM because of how it does addressing, while protected mode can do up to 4GB in 32-bit addressing (and more in 64 bit via extension).
+
+![Booting Diagram](img/booting.png)
 
 So, our current task is to get an already-existing bootloader to boot our kernel, and that's where **Multiboot** and **GRUB 2** comes in!
 
@@ -57,6 +62,8 @@ Definitely scary for people who don't know x86 assembly, so we'll build on the q
 
 ## [x86 Assembly 101](https://www.cs.virginia.edu/~evans/cs216/guides/x86.html) (useful guide from Uni of Virginia CS Dept - CS216)
 
+**Note: you can skip this section if you are pretty familiar with x86 assembly!**
+
 ### Registers
 Modern x86 processors have eight **32-bit** general purpose registers, called `EAX, EBX, ECX, EDX, ESI, EDI, ESP, EBP`. `ESP` and `EBP` are both reserved for special purposes; they correspond to the Stack Pointer and the Base Pointer. We can also subdivide the first 16-bits of `EAX, EBX, ECX, EDX` into two 8-bit registers, meaning that technically `EAX` can, for example, contain 3 registers (one 16-bit, two 8 bits).
 
@@ -73,7 +80,7 @@ var dd 0 ; declare a byte, referred to as var, containing the value 0
 
 The reason we don't use location names is because we want all parts of our multiboot header to be in the same memory location so that the bootloader can read the full header in one place.
 
-We can also declare arrays, which are just stored contiguously in memory. For example: `B DD 1,2,3` would store 3 4-byte values (1,2,3) at `B`.
+We can also declare arrays, which are just stored contiguously in memory. For example: `B DD 1,2,3` would store three 4-byte values (1,2,3) at `B`.
 
 Perhaps not entirely in the 'declaring data' section but useful to mention regardless, the `global` keyword is used to export a label (i.e. make it public). In x86 (and other assembly langs), labels are used to label sections of code. By making a label `global`, we can reference it from outside the file!
 
@@ -370,3 +377,9 @@ An entry in the P4, P3, P2 and P1 tables consist of the page aligned 52-bit *phy
 | 9-11  | available             | can be used freely by the OS                                                                 |
 | 52-62 | available             | can be used freely by the OS                                                                 |
 | 63    | no execute            | forbid executing code on this page (the NXE bit in the EFER register must be set)            |
+
+# End of Post
+
+If you have any questions, join our [discord](https://discord.gg/zKhj937xW2) and ask away!
+
+`42 49 54 53 49 47 20 3C 33 20 59 4F 55`
