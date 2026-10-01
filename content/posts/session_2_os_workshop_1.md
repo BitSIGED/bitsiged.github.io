@@ -1,6 +1,6 @@
 +++
 date = '2026-10-01T12:46:55+01:00'
-draft = true
+draft = false
 title = 'Session 2 (Workshop 1): Minimal Kernel'
 tags = ['Session', 'Operating Systems', 'Workshop']
 summary = "First workshop of Sem 1: building a minimal kernel"
