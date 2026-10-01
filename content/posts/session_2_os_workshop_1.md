@@ -523,6 +523,8 @@ p4_table:
 p3_table:
     resb 4096
 p2_table:
+    resb 4096
+p1_tables:
     resb 4096 * P1_COUNT
 stack_bottom:
 ```
