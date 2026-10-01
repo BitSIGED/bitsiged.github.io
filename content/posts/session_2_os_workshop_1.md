@@ -1,6 +1,6 @@
 +++
 date = '2026-10-01T12:46:55+01:00'
-draft = true
+draft = false 
 title = 'Session 2 (Workshop 1): Minimal Kernel'
 tags = ['Session', 'Operating Systems', 'Workshop']
 summary = "First workshop of Sem 1: building a minimal kernel"
@@ -336,7 +336,14 @@ build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
 
 If your build doesn't work with this Makefile, there may be other cross-platform problems / incompatibilities so please let us know in-session or ask on our Discord.
 
-# Towards Long Mode & Paging
+# Foreword on Long Mode & Paging
+
+## What is Long mode 
+
+At the moment our CPU has started up in 32-bit mode for backwards compatibility reasons even if our CPU is 64-bit, Because of this we have to do all the preparation and validation to switch us to 64 bit mode (referred to as **long mode**) ourself. This includes 
+- Validating the CPU supports Long Mode 
+- Enabling paging 
+- Configuring the [Global Descriptor Table](https://wiki.osdev.org/Global_Descriptor_Table)
 
 ## Paging
 
@@ -377,6 +384,304 @@ An entry in the P4, P3, P2 and P1 tables consist of the page aligned 52-bit *phy
 | 9-11  | available             | can be used freely by the OS                                                                 |
 | 52-62 | available             | can be used freely by the OS                                                                 |
 | 63    | no execute            | forbid executing code on this page (the NXE bit in the EFER register must be set)            |
+
+# Enabling long mode
+
+We will need to check the CPU we're running on has all the features we need, if not we should exit with a clear error message explaining the issue. To handle this we create a little error handler stub that accepts a error code in `al`
+
+```nasm
+; parameter `al` contains the error code 
+error:
+  mov dword [0xb8000], 0x4f524f45 ; `ER`
+  mov dword [0xb8004], 0x4f3a4f52 ; `R:`
+  mov dword [0xb8008], 0x4f204f20 ; `  `
+  mov byte  [0xb800a], al ; the error code 
+  hlt  ; stop the operating system
+```
+
+We will also need some stack space to call functions and store variables, however, as we've not set up memory yet we will need to allocate some temporary scratch space in the `bss` section of the kernel binary.
+The `.bss` section is a section of memory that we can both *read* and *write* to (different to `.text` which is *read* and *execute* only) and it is automatically loaded by grub letting us use a stack to validate the memory features without having to juggle registers.
+
+```nasm
+section .bss
+boot_stack_bottom:
+    resb 64 ; reserve 64 bytes for the stack
+boot_stack_top:
+```
+We then want to update our start method to use the new stack
+```nasm
+section .text
+bits 32
+start: 
+    mov esp, stack_top ; add the top of the stack to the esp reg (remember stack grows down)
+    ; ... 
+```
+
+## Checking for multiboot2
+
+We will use multiboot2 to initialize our kernel hence we will need to make sure we're using a bootloader that uses it. If we are using it `eax` will hold the magic bytes `0x36d76289`.
+Hence we can take advantage of our new stack and error handler and write a basic checker function.
+
+```nasm
+check_multiboot:
+  cmp eax, 0x36d76289 ; multiboot2 magic
+  jne .no_multiboot
+  ret
+.no_multiboot:
+  mov al, "0"
+  jmp error
+```
+
+## Checking for CPUID
+
+[CPUID](https://revers.engineering/x86/cpuid.pdf) is an instruction that lets us query information about the CPU we're running on (however some older CPU's don't support it so we need to check we've got it).
+If we are running on a CPU with `CPUID` support then the "flags" register will let us flip the `ID` bit otherwise it'd remain the same no matter what we do.
+
+To do this we:
+1. Copy the `flags` into a register and try flip the `ID` bit
+2. Set `flags` to the new value with the flipped bit. 
+3. Re-read `flags` and see if the bit flip saved.
+4. Reset `flags` back to its initial state.
+
+```nasm
+check_cpuid:
+  ; Step 1, Store the flags into `eax`
+  pushfd; pushes the value of the `flags` register onto the stack
+  pop eax
+  ; store the initial flags for restoration later
+  mov ecx, eax
+  ; flip the `CPUID` bit
+  xor eax, 1 << 21
+  
+  ; Step 2, copy the changed flags into FLAGS
+  push eax
+  popfd
+
+  ; Step 3, re read flags to check if we were able to set CPUID
+  pushfd
+  pop eax
+
+  ; Step 4, restore original flags (done now to prevent duplicated cleanup code)
+  push ecx
+  popfd
+
+  ; Validate the `CPUID` bit flip worked
+  cmp eax, ecx
+  je .no_cpuid
+  ret
+
+.no_cpuid:
+  mov al, "1"
+  jmp error
+```
+
+## Checking for long mode
+
+Now we've a way to validate we have the `CPUID` instruction we can use it to detect long mode support on the CPU. 
+
+To Do this we query the `CPUID` to check if we have support for long mode 
+```nasm
+check_long_mode:
+  ; eax is the argument and return to CPUID 
+  mov eax, 0x80000000 ; query what the max CPUID querys we have (as long mode query is in the extended) 
+  cpuid
+  cmp eax, 0x80000001 ; if were not greater than 0x80000001 then we've definitely no long mode  
+  jb .no_long_mode 
+  
+  mov eax, 0x80000001 
+  cpuid ; get extended processor info (including long mode support query)
+  test edx, 1 << 29 ; check for the long mode bit 
+  jz .no_long_mode
+  ret 
+
+.no_long_mode:
+  mov al, "2" 
+  jmp error
+```
+
+Have a read of [Wikipedia](https://en.wikipedia.org/wiki/CPUID#EAX=8000'0001h:_Extended_Processor_Info_and_Feature_Bits) to find out more
+
+## Enabling Paging
+### Setting up page tables 
+
+Now we know we can enter long mode we will need to set up an identity map so we can access ram. 
+
+*For those who've previously done the phil-opp blog this is where we start differing they enable huge page but we will not.*
+
+We start by setting aside some space for our page tables
+```nasm
+
+P1_COUNT equ 4
+
+section .text
+; ...
+
+section .bss 
+align 4096
+p4_table:
+    resb 4096
+p3_table:
+    resb 4096
+p2_table:
+    resb 4096 * P1_COUNT
+stack_bottom:
+```
+
+We then setup the first p4_table entry to point to the p3_table, and the first p3_table entry to point to p2_table
+
+```nasm
+set_up_page_tables: 
+  ; map first P4 entry to P3 table 
+  mov eax, p3_table
+  or eax, 0b11 ; present + writable 
+  mov [p4_table], eax
+  ; map P3 to P2
+  mov eax, p2_table
+  or eax, 0b11
+  mov [p3_table], eax
+  ; ...
+```
+
+We then fill out the first 4 values of the second page table with pointers to our p1 tables (we do this instead of just doing one entry in p2 to give us some more space as we're not doing large tables)
+
+*we use ecx as our `i` and have this act as a for loop, feel free to ask for help if you don't understand whats happening*
+
+```nasm
+  ; ...
+  mov ecx, 0
+.map_p2:
+  mov eax, ecx 
+  shl eax, 12 ; ecx * 4096 aka side of one P1 table 
+  add eax, p1_tables
+  or eax, 0b11 ; present and writable
+  mov [p2_table + ecx * 8], eax 
+  inc ecx 
+  cmp ecx, P1_COUNT
+  jne .map_p2
+
+  ;...
+```
+
+Finally we map all of the p1 tables, critically not mapping the first one as this ensures the pointer to 0 (AKA a null pointer) remains unmapped which will prevent undefined behaviour down the line
+
+```nasm
+  ;...
+
+  mov ecx, 1 ; leave null page unmapped to prevent null pointer ref
+.map_p1:
+  mov eax, ecx
+  shl eax, 12
+  or eax, 0b11 
+  mov [p1_tables + ecx * 8], eax 
+  inc ecx
+  cmp ecx, P1_COUNT * 512 
+  jne .map_p1
+  ret 
+```
+
+### Turning on paging
+
+To get the cpu to use our created page tables we must 
+
+1. Store the P4 address into CR3 (a special control register)
+2. Enable Physical Address Extension (PAE) so we can use the full 64 bit address space 
+3. Set long mode to enabled in EFER 
+4. Enable the paging flag
+
+```nasm
+enable_paging:
+  mov eax, p4_table ; laod P4 into cr3
+  mov cr3, eax 
+  
+  mov eax, cr4 ; enable PAE flag physical address extention
+  or eax, 1 << 5 
+  mov cr4, eax 
+
+  mov ecx, 0xC0000080 ; set long mode EFER MSR 
+  rdmsr 
+  or eax, 1 << 8 
+  wrmsr
+  
+  mov eax, cr0 ; enable paging in the cr0 
+  or eax, 1 << 31 
+  mov cr0, eax 
+  
+  ret
+```
+
+## The Global Descriptor Table 
+
+Finally the last requirement of long mode is the GDT which was a old segmentation register however paging is used instead of it nowadays, but it is still a requirement to enable 64 bit mode for ..... Legacy reasons ! 
+
+Don't worry to much about it now we will explain it later on, all we are doing for now is creating one code segment to allow us to execute code. We use `.rodata` as it is readonly 
+
+```nasm
+section .rodata
+gdt64: ; long mode gdt
+    dq 0 ; zero entry
+.code: equ $ - gdt64 ; new
+    dq (1<<43) | (1<<44) | (1<<47) | (1<<53) ; code segm
+.pointer:
+    dw $ - gdt64 - 1
+    dq gdt64
+```
+
+## Putting it all together
+
+```nasm
+global start
+extern long_mode_start
+
+P1_COUNT equ 4
+
+section .text
+bits 32
+start:
+    ; Setup temporary stack
+    mov esp, boot_stack_top
+
+    ; check required features 
+    call check_multiboot
+    call check_cpuid
+    call check_long_mode
+
+    ; configure long mode
+    call set_up_page_tables
+    call enable_paging
+
+    ; load the GDT
+    lgdt [gdt64.pointer]
+    jmp gdt64.code:long_mode_start
+    
+    ; if something went wrong report it as L
+    mov al, "L"
+    jmp error
+```
+
+Now we create another file `longmode.asm` and define the `long_mode_start` method and have it print `OKAY` (which will require quad words only available in long mode)
+```nasm
+global long_mode_start
+
+section .text
+bits 64
+long_mode_start:
+    ; Clear legacy regs 
+    mov ax, 0
+    mov ss, ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    ; print `OKAY` to screen
+    mov rax, 0x2f592f412f4b2f4f
+    mov qword [0xb8000], rax
+    hlt
+```
+Now you should be able to run the os and get OKAY printed to the screen 
+
+CONGRATS WE ARE NOW IN LONG MODE!
+ 
+In the next session we will be setting up rust and defining an interface for interacting with the VGA in rust 
 
 # End of Post
 
