@@ -20,7 +20,7 @@ We also use supplementary materials, like the CS216 guide to x86 assembly from t
 
 **Furthermore, the majority of the content of these workshops will be written assuming a Linux host machine in mind. We can assist with some differences in distros, but we'd ask that if you follow this guide with a macOS or Windows system, you should use a Linux VM (like WSL).**
 
-# A minimal multiboot Rust Kernel (Phil Opp)
+# A minimal multiboot Rust Kernel
 
 We'll be going into how to create a minimal x86 OS kernel with the Multiboot standard. For now, all we want is to get `OK` to print to the screen. But before we can get into doing any of that, we need to understand how a computer boots.
 
@@ -168,6 +168,17 @@ start:
     hlt
 ```
 
+### VGA Buffer: How do we "print 'OK'"?
+
+Ok, so we can see that we are declaring a word `0x2f4b2f4f` and moving it to the memory address `0xb8000`. How is this enough to print 'OK' to the screen? There's no mention of 'OK' at all like you'd see in `print('OK')` in Python or some other higher-level language. And what is this `0xb8000` address?
+
+`0xb8000` is where the **VGA text buffer** begins. It's an array of screen characters that are displayed by the graphics card. Nowadays some people can call VGA displays retro, but they're quite useful for our minimal kernel because we can get stuff printing to the screen!
+
+So then it seems that if we move a word to `0xb8000`, the VGA buffer will render it. Let's dissect `0x2f4b2f4f` - what is it actually doing?
+
+Characters that we're sending to the VGA buffer come in two parts; 8 bits for a color code, and 8 bits for an ASCII character. `2f` is the color code for white text on a green background, and `4b` and `4f` are ASCII `K` and `O` respectively. The reason we get `OK` and not `KO` is because of Little-Endian (see Endianness section above). So in its entirety, it's like we're saying "okay, I'm sending stuff to the VGA buffer. I'm sending `2f4b` which means white text on green background, letter K, and `2f4f`, which has the same colour (`2f`) but the letter O this time".
+
+
 ## Building the executable
 Okay, great, we've got the boot code and the multiboot header which will tell GRUB that our kernel supports Multiboot 2. But GRUB will need something called an **ELF** (Executable and Linkable Format)  Executable, and our files to be **ELF** object files, which we can get `nasm` to create by passing the `-f elf64` flag when using `nasm` to assemble our code.
 
@@ -191,6 +202,11 @@ SECTIONS {
     }
 }
 ```
+
+- `start` is the entry point which the bootloader will jump to after loading the kernel
+- `. = 1M;` sets the load address of the first section to 1 MiB (convention)
+- the executable will be made of two sections: `.boot` first and `.text` afterwards. `.text` output section contains all input sections named `.text`.
+- Sections named `.multiboot_header` are added to the first output section; necessary as GRUB expects to find the Multiboot header very early in the file.
 
 With the linker now ready, we can create the ELF object files and link them together into the ELF executable that we're after:
 
@@ -312,3 +328,45 @@ build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
 ```
 
 If your build doesn't work with this Makefile, there may be other cross-platform problems / incompatibilities so please let us know in-session or ask on our Discord.
+
+# Towards Long Mode & Paging
+
+## Paging
+
+You might have heard of virtual memory before, and should definitely know about physical memory. After all, one of these things we can see physically, and the other thing is, well, virtual. **Paging** is a memory management scheme that links physical memory and virtual memory. The logical / virtual address space is split into equal sized *pages* and a *page table* specifies which **virtual page** points to which **physical page**. 
+
+In long mode, x86 uses a page size of 4096 bytes and a 4 level page table that consists of:
+- the Page-Map Level-4 Table (PML4)
+- the Page-Directory Pointer Table (PDP)
+- the Page-Directory Table (PD)
+- the Page Table (PT)
+
+To simplify things, let's call them P4,P3,P2,P1 from now on. Each page table contains 512 entries and one entry is 8 bytes, so they fit exactly in one 'page' (`512*8 = 4096`, so 512 entries on one page). Let's think about what happens when we want the CPU to translate a virtual address to a physical address:
+
+![Paging Explained](https://os.phil-opp.com/entering-longmode/X86_Paging_64bit.svg)
+
+1. Get the address of the `P4` table from the `CR3` register
+2. Use bits 39-47 (9 bits) as an index into `P4` (`2^9 = 512 = num of entries`)
+3. Use the following 9 bits as an index into `P3`
+4. Use the following 9 bits as an index into `P2`
+5. Use the following 9 bits as an index into `P1`
+6. Use the last **12** bits as page offset (`2^12 = 4096 = page size`)
+
+The eagle-eyed might notice that we don't do anything to bits 48-63 of the 64-bit virtual address. They can't be used; the '64-bit' long mode is in fact just a 48-bit mode. The 48-63 bits must be copies of bit 47, so each valid virtual address is still unique. Wikipedia seems to suggest that the main reason for the '48-bit mode' is that we don't need full 64-bit addressing as that would drastically raise complexity / the number of potential virtual addresses, much more than we'd ever need really.
+
+An entry in the P4, P3, P2 and P1 tables consist of the page aligned 52-bit *physical address* of the frame or the next page table and the following bits that can be `OR`-ed in:
+
+| Bits  | Name                  | Meaning                                                                                      |
+|-------|-----------------------|----------------------------------------------------------------------------------------------|
+| 0     | present               | the page is currently in memory                                                              |
+| 1     | writable              | it's allowed to write to this page                                                           |
+| 2     | user accessible       | if not set, only kernel mode code can access this page                                       |
+| 3     | write through caching | writes go directly to memory (write-through policy)                                          |
+| 4     | disable cache         | no cache is used for this page                                                               |
+| 5     | accessed              | the CPU sets this bit when this page is used                                                 |
+| 6     | dirty                 | the CPU sets this bit when a write to this page occurs                                       |
+| 7     | huge page / null      | must be 0 in P1 & P4, creates a 1 GiB page in P3, creates a a 2 MiB page in P2               |
+| 8     | global                | page isn't flushed from caches on address space switch (PGE bit of CR4 register must be set) |
+| 9-11  | available             | can be used freely by the OS                                                                 |
+| 52-62 | available             | can be used freely by the OS                                                                 |
+| 63    | no execute            | forbid executing code on this page (the NXE bit in the EFER register must be set)            |
