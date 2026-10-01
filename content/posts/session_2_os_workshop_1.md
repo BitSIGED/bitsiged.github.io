@@ -16,6 +16,8 @@ This guide is intended for self-study / for people to follow along themselves. T
 
 We use a lot of material from Philipp Oppermann's blog *'Writing an OS in Rust (First Edition)'*; in fact, our workshop posts will effectively use his materials as a baseline that we will build on with theory, further ideas and may diverge in some cases where we thought it useful. Please check out his blog [here](https://os.phil-opp.com/edition-1/); our work would be much harder without his content!
 
+We also use supplementary materials, like the CS216 guide to x86 assembly from the University of Virginia which you can find [here](https://www.cs.virginia.edu/~evans/cs216/guides/x86.html). Thanks to David Evans, Adam Ferrari, Alan Batson, Mike Lack, Anita Jones + all other contributors to this guide!
+
 **Furthermore, the majority of the content of these workshops will be written assuming a Linux host machine in mind. We can assist with some differences in distros, but we'd ask that if you follow this guide with a macOS or Windows system, you should use a Linux VM (like WSL).**
 
 # A minimal multiboot Rust Kernel (Phil Opp)
@@ -51,13 +53,105 @@ header_start:
 header_end:
 ```
 
-Definitely scary for people who don't know x86 assembly, so we'll build on the quick guide from the Phil Opp blog here and go over the basics of assembly.
+Definitely scary for people who don't know x86 assembly, so we'll build on the quick guide from the Phil Opp blog here and go over the basics of x86 assembly.
 
-**ASSEMBLY SECTION**
+## [x86 Assembly 101](https://www.cs.virginia.edu/~evans/cs216/guides/x86.html) (useful guide from Uni of Virginia CS Dept - CS216)
 
-Anyhow, we can use the `nasm` command to assemble `multiboot_header.asm`. If we hexdump the assembled flat binary, we can actually spot a good-to-be-aware-of feature of x86: **Little Endian**.
+### Registers
+Modern x86 processors have eight **32-bit** general purpose registers, called `EAX, EBX, ECX, EDX, ESI, EDI, ESP, EBP`. `ESP` and `EBP` are both reserved for special purposes; they correspond to the Stack Pointer and the Base Pointer. We can also subdivide the first 16-bits of `EAX, EBX, ECX, EDX` into two 8-bit registers, meaning that technically `EAX` can, for example, contain 3 registers (one 16-bit, two 8 bits).
 
-**Endianness**
+### Declaring data
+
+We can declare static data regions which are analogous to global variables. In our case, we are looking at directives such as `dd` (declare double, 32-bit), `dw` (declare word, 16-bit). These directives will output whatever we specify, so for example `dd 0xe85250d6` will output the double `0xe85250d6` (this is a magic number used to identify that our header is a multiboot 2 header).
+
+There's also `db` (declare byte), which is 8-bits.
+
+Note that in our `multiboot_header.asm`, we don't use any variables, meaning that all of these declarations will store the values next to each other in memory. If we were to use variables (aka locations), our lines would look like this for example:
+```
+var dd 0 ; declare a byte, referred to as var, containing the value 0
+```
+
+The reason we don't use location names is because we want all parts of our multiboot header to be in the same memory location so that the bootloader can read the full header in one place.
+
+We can also declare arrays, which are just stored contiguously in memory. For example: `B DD 1,2,3` would store 3 4-byte values (1,2,3) at `B`.
+
+Perhaps not entirely in the 'declaring data' section but useful to mention regardless, the `global` keyword is used to export a label (i.e. make it public). In x86 (and other assembly langs), labels are used to label sections of code. By making a label `global`, we can reference it from outside the file!
+
+### Addressing Memory
+Modern x86-compatible processors are capable of addressing up to 2^32 bytes of memory: memory addresses are 32-bits wide. We can also use two 32-bit registers and a 32-bit signed constant added together to compute a memory address (e.g. `0x100000 + 0x000004`).
+
+Let's look at some examples of `mov` instructions using address computations:
+
+```nasm
+mov eax,[ebx] ; move the 4 bytes in mem at EBX into EAX
+
+mov [var], ebx ; move contents of EBX into 4 bytes at var (var is a 32-bit constant)
+
+mov eax, [esi-4] ; move 4 bytes at memory address ESI + (-4) into EAX
+
+mov [esi+eax], cl ; move the contents of CL into the byte at address ESI+EAX
+```
+
+### Data Movement + Arith and Logic Instructions
+Here we'll just list the instructions and what they generally do; if you want to read more about them, click on the link attached to the **x86 Assembly 101** section title.
+
+- `mov`: move. Copy a data item referred to by its second operand into the location referred to by its first operand.
+- `push`: push stack. Place an operand onto the top of the stack in memory.
+- `pop`: pop stack. Pop an operand off the top of the stack in memory.
+- `lea`: load effective address. Places the address specified by its second operand into the register specified by its first operand (not the contents of the mem location).
+
+- `add`: add.
+- `sub`: subtract.
+- `inc, dec`: increment or decrement by one.
+- `imul`: integer multiplication
+- `idiv`: integer division
+- `and,or,xor`: Bitwise logical ANDs, ORs and XOR operations.
+- `not`: Bitwise logical NOT.
+- `neg`: negate. Performs the two's complement negation of the operand contents.
+- `shl, shr`: bit shift left and bit shift right.
+
+### Control Flow Instructions
+
+Similarly to the last section, we'll just list the instructions and a small text on what they do. Control Flow instructions are quite important to understand in general, so get used to them:
+
+- `jmp <label>`: jump. Transfer program control flow to the instruction at the memory location indicated by the operand.
+- `jcondition <label>`: conditional jump. Same as jump but **on a condition**. We replace `condition` with the condition we'd actually like to check for, e.g.:
+    - `je`: jump when equal
+    - `jne`: jump when not equal
+    - `jge:` jump when greater than
+    - ... etc.
+
+- `cmp`: compare. Compare the values of the two specified operands, setting the condition codes in the machine status word appropriately. We could pair this with a subsequent instr like `jeq` to determine what happens depending on result of `cmp`.
+
+- `call, ret`: subroutine call & return - don't necessarily need to know this at the moment, but handy to know if you want to do subroutines (functions).
+
+### Additional useful bits (for this workshop)
+- `.text` section is the default section for executable code
+- `bits 32` specifies that the following lines are 32-bit instructions. `bits 64` would specify that they're 64-bit, etc.
+- `hlt` halts the CPU.
+
+While not an indepth guide to x86 assembly, this should give you enough of an idea of how things work to understand the x86 we use!
+
+## Endianness
+
+Anyhow, we can use the `nasm` command to assemble `multiboot_header.asm`. If we hexdump the assembled flat binary, we can actually spot a good-to-be-aware-of feature of x86: **Little-Endian**.
+
+```
+> nasm multiboot_header.asm
+> hexdump -x multiboot_header
+0000000    50d6    e852    0000    0000    0018    0000    af12   17ad
+0000010    0000    0000    0008    0000
+0000018
+```
+
+You probably have heard of Endianness before; it is the order of bytes stored in computer memory for data types that consist of multiple bytes (e.g. strings). There's two conventions, **Big-Endian** and **Little-Endian**.
+
+- **Big-Endian**: stores the most significant byte ('big end') at the lowest memory address. This matches how we naturally read numbers from left to right.
+- **Little-Endian**: stores the least significant byte ('little end') at the lowest memory address.
+
+So how does that hex dump demonstrate Little-Endian? If you take a look at `50d6` and `e852`, it's clear that `50d6` appears first (e.g. at a lower area in memory) and then `e852` follows. However, when we wrote our x86 assembly above, we declared the double `0xe85250d6`, where clearly `e852` is the most significant byte and `50d6` is the least significant byte. So clearly, since this order appears 'swapped' in our hex dump, we're using Little-Endian.
+
+You can save yourself this entire investigation by just searching up that x86 uses Little-Endian as standard, but it's fun to spot little things like that to cement your understanding.
 
 ## Boot Code
 
@@ -170,14 +264,17 @@ However, let's do some build automation first as typing out all those commands e
             └── grub.cfg
 ```
 
-Then save the Makefile with this content:
-```make
+Then save the Makefile with this content (this is a custom Makefile written by **Archie** that specifically checks for systems that may need to use `grub2-mkrescue` vs `grub-mkrescue`):
+
+```Make
 arch ?= x86_64
 kernel := build/kernel-$(arch).bin
 iso := build/os-$(arch).iso
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg
+# Some systems have grub-mkrescue2 instead of grub-mkrescue, so we check for both
+grub_mkrescue := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 assembly_source_files := $(wildcard src/arch/$(arch)/*.asm)
 assembly_object_files := $(patsubst src/arch/$(arch)/%.asm, \
 	build/arch/$(arch)/%.o, $(assembly_source_files))
@@ -198,7 +295,11 @@ $(iso): $(kernel) $(grub_cfg)
 	@mkdir -p build/isofiles/boot/grub
 	@cp $(kernel) build/isofiles/boot/kernel.bin
 	@cp $(grub_cfg) build/isofiles/boot/grub
-	@grub-mkrescue -o $(iso) build/isofiles 2> /dev/null
+	@if [ -z "$(grub_mkrescue)" ]; then \
+		echo "error: grub2 mkrescue is required to build the ISO"; \
+		exit 127; \
+	fi
+	@$(grub_mkrescue) -o $(iso) build/isofiles 2> /dev/null
 	@rm -r build/isofiles
 
 $(kernel): $(assembly_object_files) $(linker_script)
@@ -210,4 +311,4 @@ build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
 	@nasm -felf64 $< -o $@
 ```
 
-Note that you'll have to make changes to this default Makefile depending on your system (for example, recall that Fedora uses `grub2-mkrescue`, so you'll have to update any mentions of `grub-mkrescue` in the Makefile).
+If your build doesn't work with this Makefile, there may be other cross-platform problems / incompatibilities so please let us know in-session or ask on our Discord.
