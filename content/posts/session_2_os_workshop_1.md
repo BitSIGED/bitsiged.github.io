@@ -189,7 +189,7 @@ Characters that we're sending to the VGA buffer come in two parts; 8 bits for a 
 ## Building the executable
 Okay, great, we've got the boot code and the multiboot header which will tell GRUB that our kernel supports Multiboot 2. But GRUB will need something called an **ELF** (Executable and Linkable Format)  Executable, and our files to be **ELF** object files, which we can get `nasm` to create by passing the `-f elf64` flag when using `nasm` to assemble our code.
 
-Then, the **ELF** executable is created by *linking* the **ELF** object files together. To do this, we use a custom linking script called `linker.ld`:
+Then, the **ELF** executable is created by *linking* the **ELF** object files together. This is done by something called a *linker*, which in summary 'links' multiple files / objects together into one main executable. To do this, we create a custom linking script called `linker.ld`:
 
 ```ld
 ENTRY(start)
