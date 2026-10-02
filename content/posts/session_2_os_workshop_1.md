@@ -273,6 +273,8 @@ So, in summary:
 4. it jumps to the entry point (`0x100020`)
 5. our kernel prints the green `OK` and stops the CPU.
 
+**Important:** We've also found at our sessions some people being unable to boot their custom OS in QEMU because their underlying system is EFI (and `grub-mkrescue` will attempt to produce EFI boot images instead of a BIOS boot image for QEMU). Thanks to *emk1024* from Phil Opp's blog, the solution is to install `grub-pc-bin` and run `grub-mkrescue /usr/lib/grub/i386-pc -o myos.iso isodir`.
+
 Congrats, you've got your kernel to boot! At this stage, you could even put it on a USB stick and boot it onto B.O.C!
 
 However, let's do some build automation first as typing out all those commands each time you want to build your ISO is gonna get real tedious real fast. We'll use `Makefile` for this. Firstly, create the following directory structure:
