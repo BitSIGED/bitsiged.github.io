@@ -1,7 +1,7 @@
 +++
 date = '2026-09-18T14:32:38+01:00'
 draft = false
-title = 'Welcome Week Session (Session 0)'
+title = 'Session 0: Welcome Week Session'
 tags = ['Session', 'Digital Logic']
 summary = 'Post with content from the Welcome Week Session'
 +++

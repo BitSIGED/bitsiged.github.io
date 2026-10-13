@@ -1,7 +1,7 @@
 +++
 date = '2026-09-25T11:09:55+01:00'
 draft = false
-title = 'OS Fundamentals / Intro (Session 1)'
+title = 'Session 1: OS Fundamentals / Intro'
 tags = ['Session', 'Operating Systems']
 summary = "Content & Summary from Session 1 (24/9/2026)"
 +++

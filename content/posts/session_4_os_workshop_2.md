@@ -23,6 +23,13 @@ Empty at the moment - check back later!
 
 # Rust set up & boilerplate
 
+Continuing on with Phil Oppermann's amazing blog, we'll now be installing Rust and setting up all sorts of boilerplate code to make things work. We'll try to explain things along the way, but if there's something not working or confusing, don't hesitate to let us know in-session or on the discord.
+
+## Installing Rust
+
+Since we'll be using a lot of unstable features, we'll need to use **nightly** for its compiler. To do this, we'll managae our Rust installations with the use of [rustup](https://rustup.rs/). To tell rustup that we want to use nightly for our current directory, we run `rustup override nightly` in the terminal.
+
+## Creating a Cargo project
 
 # VGA Text Buffer with Rust Macros
 
