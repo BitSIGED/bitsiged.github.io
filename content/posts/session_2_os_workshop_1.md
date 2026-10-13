@@ -18,10 +18,10 @@ We use a lot of material from Philipp Oppermann's blog *'Writing an OS in Rust (
 
 We also use supplementary materials, like the CS216 guide to x86 assembly from the University of Virginia which you can find [here](https://www.cs.virginia.edu/~evans/cs216/guides/x86.html). Thanks to David Evans, Adam Ferrari, Alan Batson, Mike Lack, Anita Jones + all other contributors to this guide!
 
-**Furthermore, the majority of the content of these workshops will be written assuming a Linux host machine in mind. We can assist with some differences in distros, but we'd ask that if you follow this guide with a macOS or Windows system, you should use a Linux VM (like WSL).**
+**Furthermore, the majority of the content of these workshops will be written assuming a Linux host machine in mind. We can assist with some differences in distros, but we'd ask that if you follow this guide with a macOS or Windows system, you should use a Linux VM (like WSL).** For issues relating to compatibility and system-specific fixes, either ask us in-session or on the Discord to see if we know a fix!
 
 ## Session Content:
-Empty at the moment - check back later!
+[Session Slides (Click Me!)](https://drive.google.com/file/d/1eO0TE37TY9nAh28VsuhjLZ6pXg6-dPOa/view?usp=sharing)
 
 # A minimal multiboot Rust Kernel
 
