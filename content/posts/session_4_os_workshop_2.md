@@ -84,6 +84,17 @@ We can now build our project by running `cargo build` which creates a static lib
 - **No SSE**: Our target might not have **SSE** support (SSE = Streaming SIMD Extensions). Even if it does, we don't want to use SSE instructions in our kernel as it makes interrupt handling muchb slower. More on this later..
 - **No hardware floats**: The `x86_64` architecture uses SSE instructions for floating point operations, which as said above, we're not gonna use. So we'll need to avoid hardware floating point operations in our kernel; instead, we'll use *soft floats*, which are basically software functions that emulate floating point operations using normal integers.
 
+### What's the 'red zone'?
+The red zone is an optimization of the [System V ABI](https://wiki.osdev.org/System_V_ABI) that allows functions to temporarily use **128 bytes below its stack frame** without adjusting the stack pointer.
+
+![The red zone](https://os.phil-opp.com/set-up-rust/red-zone.svg)
+
+The idea is that the function can use this 'red zone' area for temporary data that's not needed across function calls. This provides a nice optimization where we don't have to adjust the stack pointer in somde cases (e.g. leaf functions). Think of it as a 'messy-work' area that we don't necessarily care much for, but are about to see why its problematic.
+
+Suppose an **exception** occurs while the red zone is in use by the function. The CPU and the exception handler will grow the stack downwards (moving the new stack pointer's location down) to accommodate the Exception Stack Frame, Register Backup & Handler Function Stack Frame. But hold on; we're using the red zone and then the exception has suddenly taken up space in the red zone, thus overwriting the data there, which will still be needed by the interrupted function (whenever the interrupt ceases). So the function will no longer work correctly upon the exception handler returning control and generally causes a big headache for anyone trying to debug this black magic ([especially for this guy in 2010](https://forum.osdev.org/viewtopic.php?t=21720)).
+
+To avoid all this hassle and headache, we'll just disable the red zone so that we don't have to worry about it when implementing exception handling.
+
 ### Target Specifications
 
 With the properties of our target system in mind, we can use a JSON configuration file to specify this custom target. A minimal target specification equal to `x86_64-unknown-linux-gnu` (default 64-bit Linux target) looks like this (don't use this):
