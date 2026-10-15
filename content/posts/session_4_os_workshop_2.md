@@ -184,8 +184,8 @@ The problem is that the core library is distributed together with the Rust compi
 
 That's where [xargo](https://github.com/japaric/xargo) comes in, which is a wrapper for cargo that makes cross compilation easier. Install it with (we'll need rust-src as well as it's a xargo dependency):
 
-`cargo install xargo`
-`rustup component add rust-src`
+- `cargo install xargo`
+- `rustup component add rust-src`
 
 Xargo is *“a drop-in replacement for cargo”*, so every cargo command also works with xargo. However, the build command gains additional functionality: `xargo build` will automatically cross compile the core library when compiling for custom targets.
 
