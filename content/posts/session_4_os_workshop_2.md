@@ -718,9 +718,30 @@ pub static WRITER: Writer = Writer {
 };
 ```
 
-However this wont work because it needs to be mutable so we can update the `column_position` we could make it a `static mut` however this would introduce race conditions when we start working with asnyc code.
+However this wont work because it needs to be mutable so we can update the `column_position` we could make it a `static mut` however this would introduce race conditions when we start working with asnyc code. Additionally if we try compile this at the moment it will fail as rusts constant evaluator fails to realise that this is a one time initialisation that could be constant.  
 
-To resolve this we use a `Mutex` (mutual exclusion) which allows us to Lock a resource so only one thread can use it at a time. At the moment we don't have access to the more efficient Mutex implementations so instead we use a spin lock, which works by having a process continuously quering if the resource is now free. For self-explanatory reasons this isn't the best solution but its the only one we have access to at the moment.
+To resolve the constants issue we can use lazy statics, a library that lets statics be computed at runtime instead of compile time. 
+
+```toml
+[dependencies.lazy_static]
+version = "1.0"
+features = ["spin_no_std"]
+```
+and using it in the code 
+```rust
+// src/vga_buff/mod.rs
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref WRITER: Writer = Writer {
+        column_position: 0,
+        color_code: ColorCode::new(Color::Yellow, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    };
+}
+```
+
+Next to resolve the async issues we use a `Mutex` (mutual exclusion) which allows us to Lock a resource so only one thread can use it at a time. At the moment we don't have access to the more efficient Mutex implementations so instead we use a spin lock, which works by having a process continuously quering if the resource is now free. For self-explanatory reasons this isn't the best solution but its the only one we have access to at the moment.
 
 To use it we add the spin crate (to avoid us implemnting it now, we will have to later)
 ```toml
@@ -732,7 +753,7 @@ and activate it with the following line in `src/lib.rs`
 ```rust
 extern crate spin;
 ```
-now we can use it in the `src/vga_buff/writer.rs`
+now we can use it in the `src/vga_buff/writer.rs`. However  
 ```rust
 use spin::Mutex;
 
@@ -744,6 +765,8 @@ pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
     buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) },
 });
 ```
+
+
 And we can now see it working in our main function
 ```rust
 pub extern fn rust_init() {
@@ -755,7 +778,35 @@ pub extern fn rust_init() {
 ```
 
 ## A println macro
-Although we *can* now use the `WRITER` in a thread safe way it's in no way ergonomic to use. REFRESH THE PAGE 
+Although we *can* now use the `WRITER` in a thread safe way it's in no way to ergonomicly use it.
+
+To start we can create a nice print function that does all of the locking and formating .
+
+```rust
+// src/vga_buff/mod.rs 
+
+use core::fmt;
+
+#[doc(hidden)] // hide this function from lsp's as were about to replace it with a better func
+pub fn _print(args: fmt::Arguments) {
+    use core::fmt::Write;
+    WRITER.lock().write_fmt(args).unwrap();
+}
+```
+
+```rust
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::vga_buff::_print(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+```
+
 
 ### Clearing the screen
 
