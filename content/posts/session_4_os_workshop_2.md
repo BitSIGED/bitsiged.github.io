@@ -1,4 +1,4 @@
-++init+
++++
 date = '2026-10-13T13:39:37+01:00'
 draft = true
 title = 'Session 4 (Workshop 2): Adding in Rust'
@@ -48,7 +48,18 @@ crate-type = ["staticlib"]
 If you want additional details on `Cargo.toml`, we recommend checking out the Cargo reference in the rust-lang docs [here](https://doc.rust-lang.org/cargo/reference/index.html).
 
 ### Rust 101 - an aside
-TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
+*Note:* This is not a guide that will teach you Rust. We will try to explain as much as possible as we go along, but there are parts where we expect you to use Google if you don't fully understand something; we can't explain every single snippet of code. If you have experience with langs like C, C++, you should find Rust not extremely different, but there are some fundamental differences you should know about:
+
+1. **Memory Safety & Ownership.** Rust enforces memory safety at compile time through an *ownership and borrowing* model. You might've heard about Rust's **borrow checker** before, and Rust tracks who "owns" data and how long it lives (lifetimes). This is different to C, where the programmer sorta has free reign to do `malloc` and `free` as they please, often segfaulting in the process!
+
+2. **Error Handling**. Rust uses the `Result` type for error handling, encouraging explicit error checking. C++ traditionally uses exceptions which, if not handled properly, can cause resource leaks and performance overheads.
+
+3. **Metaprogramming**. Rust uses trait-based generics and macros for metaprogramming, which are less powerful than C's template metaprogramming approach for compile-time computations. Subjectively though, we think Rust's approach is more readable..
+
+Here's a helpful table graphic for those interested:
+![Rust vs C++](https://www.techtarget.com/rms/onlineimages/rust_vs_c++-f.png)
+
+The main idea we want you to take away from Rust vs other low level langs is that the most confusing part of these workshops will probably be us trying to appease the borrow checker, so bear with us! If you want to, you can read more about the borrow checker here: [LogRocket on the Rust Borrow Checker](https://blog.logrocket.com/introducing-rust-borrow-checker/). You can also find Rust docs [here](https://doc.rust-lang.org/stable/).
 
 ### Source File
 
