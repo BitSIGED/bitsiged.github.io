@@ -134,16 +134,20 @@ With the properties of our target system in mind, we can use a JSON configuratio
 For our target system, we'll define the following JSON config in a file named `x86_64-[your_os_name].json`:
 ```json
 {
-  "llvm-target": "x86_64-unknown-none",
-  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
-  "linker-flavor": "gcc",
-  "target-endian": "little",
-  "target-pointer-width": "64",
-  "target-c-int-width": "32",
-  "arch": "x86_64",
-  "os": "none",
-  "disable-redzone": true,
-  "features": "-mmx,-sse,+soft-float"
+    "llvm-target": "x86_64-unknown-none",
+    "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+    "arch": "x86_64",
+    "target-endian": "little",
+    "target-pointer-width": 64,
+    "target-c-int-width": 32,
+    "os": "none",
+    "executables": true,
+    "linker-flavor": "ld.lld",
+    "linker": "rust-lld",
+    "panic-strategy": "abort",
+    "disable-redzone": true,
+    "features": "-mmx,-sse,+soft-float",
+    "rustc-abi": "softfloat"
 }
 ```
 
