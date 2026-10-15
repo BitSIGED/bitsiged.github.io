@@ -1,6 +1,6 @@
 +++
 date = '2026-10-13T13:39:37+01:00'
-draft = true
+draft = false
 title = 'Session 4 (Workshop 2): Adding in Rust'
 tags = ['Session', 'Operating Systems', 'Workshop']
 summary = "Second workshop of Sem 1: Introducing Rust and making VGA Buffer printing easier"
@@ -709,9 +709,57 @@ Then, the `clear_row` method clears a row by overwriting all of its characters w
 
 ## Providing an Interface
 
+We now need global writer that can be used by other modules, to do this we make a static WRITER 
+```rust
+pub static WRITER: Writer = Writer {
+    column_position: 0,
+    color_code: ColorCode::new(Color::White, Color::Black),
+    buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) },
+};
+```
+
+However this wont work because it needs to be mutable so we can update the `column_position` we could make it a `static mut` however this would introduce race conditions when we start working with asnyc code.
+
+To resolve this we use a `Mutex` (mutual exclusion) which allows us to Lock a resource so only one thread can use it at a time. At the moment we don't have access to the more efficient Mutex implementations so instead we use a spin lock, which works by having a process continuously quering if the resource is now free. For self-explanatory reasons this isn't the best solution but its the only one we have access to at the moment.
+
+To use it we add the spin crate (to avoid us implemnting it now, we will have to later)
+```toml
+[dependencies]
+rlibc = "0.1.4"
+spin = "0.4.5"
+```
+and activate it with the following line in `src/lib.rs`
+```rust
+extern crate spin;
+```
+now we can use it in the `src/vga_buff/writer.rs`
+```rust
+use spin::Mutex;
+
+// Existing code ...
+
+pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
+    column_position: 0,
+    color_code: ColorCode::new(Color::LightGreen, Color::Black),
+    buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) },
+});
+```
+And we can now see it working in our main function
+```rust
+pub extern fn rust_init() {
+    use core::fmt::Write;
+    vga_buffer::WRITER.lock().write_str("Hello again");
+    write!(vga_buffer::WRITER.lock(), ", some numbers: {} {}", 42, 1.337);
+    loop{}
+}
+```
+
 ## A println macro
+Although we *can* now use the `WRITER` in a thread safe way it's in no way ergonomic to use. REFRESH THE PAGE 
 
 ### Clearing the screen
+
+### Line wrapping 
 
 ### Hello World using println
 
