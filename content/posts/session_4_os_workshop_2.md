@@ -1,4 +1,4 @@
-+++
+++init+
 date = '2026-10-13T13:39:37+01:00'
 draft = true
 title = 'Session 4 (Workshop 2): Adding in Rust'
@@ -58,7 +58,7 @@ Now, we want to place our root source file in `src/lib.rs`:
 #![no_std]
 
 #[no_mangle]
-pub extern fn rust_main() {}
+pub extern fn rust_init() {}
 
 #[lang = "eh_personality"] #[no_mangle] pub extern fn eh_personality() {}
 #[lang = "panic_fmt"] #[no_mangle] pub extern fn panic_fmt() -> ! {loop{}}
@@ -68,8 +68,8 @@ pub extern fn rust_main() {}
 - The `feature` attribute allows the specified *featured-gated* attributes in this crate. This can't be done in a stable/beta compiler, hence why we use Rust nightly.
 - `no_std` attribute prevents the automatic linking of the standard library. This is because `std` relies on operating system features like files, syscalls, device drivers, IO and more which at the moment isn't handled by our OS!
 - A `#` without a `!` defines an attribute for the *following* item (in this case, a function).
-- `no_mangle` attribute disables the automatic *name mangling* that Rust uses to get unique function names. We want to call to `rust_main` from our assembly code, and if name mangling was enabled, `rust_main` wouldn't be the actual name of our function.
-- We mark `rust_main()` as `extern` to make it compatible to the standard C [calling convention](https://doc.rust-lang.org/std/keyword.extern.html).
+- `no_mangle` attribute disables the automatic *name mangling* that Rust uses to get unique function names. We want to call to `rust_init` from our assembly code, and if name mangling was enabled, `rust_init` wouldn't be the actual name of our function.
+- We mark `rust_init()` as `extern` to make it compatible to the standard C [calling convention](https://doc.rust-lang.org/std/keyword.extern.html).
 - The `lang` attribute defines a Rust [language item](https://doc.rust-lang.org/1.10.0/book/lang-items.html) (basically a way to make the `rustc` compiler know that certain operations exist)
 - `eh_personality` function is used for us to tell Rust how to handle stack [unwinding](https://doc.rust-lang.org/nomicon/unwinding.html) on a `panic!`. At the moment, we leave this empty.
 - `panic_fmt` function is the entry point on panic (i.e. what we do when a panic occurs). Again, we can't do much useful stuff here yet, so we just make sure that it doesn't return anything by looping (and use the `!` return type to specify a no-return type).
@@ -188,7 +188,7 @@ It worked! We were able to cross compile `core` for our custom target and then c
 
 ## Integrating Rust
 
-Let’s try to integrate our Rust library into our assembly kernel so that we can call the rust_main function. For that we need to pass the `lib[your_os_name].a` file to the linker, together with the assembly object files. To do this, we'll extend our makefile:
+Let’s try to integrate our Rust library into our assembly kernel so that we can call the rust_init function. For that we need to pass the `lib[your_os_name].a` file to the linker, together with the assembly object files. To do this, we'll extend our makefile:
 
 ```Makefile
 # ...
@@ -211,13 +211,14 @@ We add a new kernel target that just executes `xargo build` and modify the `$(ke
 
 Let's go back to our `longmode.asm` file (`long_mode_start`) and add the following:
 ```rust
+extern rust_init        ; new
+
 bits 64
 long_mode_start:
     ...
 
-    ; call the rust main
-    extern rust_main     ; new
-    call rust_main       ; new
+    ; call the rust initalisation code 
+    call rust_init      ; new
 
     ; print `OKAY` to screen
     mov rax, 0x2f592f412f4b2f4f
@@ -225,15 +226,15 @@ long_mode_start:
     hlt
 ```
 
-By defining `rust_main` as `extern` we tell nasm that the function is defined in another file. As the linker takes care of linking them together, we’ll get a linker error if we have a typo in the name or forget to mark the rust function as `pub extern`.
+By defining `rust_init` as `extern` we tell nasm that the function is defined in another file. As the linker takes care of linking them together, we’ll get a linker error if we have a typo in the name or forget to mark the rust function as `pub extern`.
 
 If we’ve done everything right, we should still see the green `OKAY` when executing `make run`. That means that we successfully called the Rust function and returned back to assembly.
 
 ### Linker Errors of doom and despair
 
-Try adding the following rust code to our `rust_main()` function in our `src/lib.rs` file:
+Try adding the following rust code to our `rust_init()` function in our `src/lib.rs` file:
 ```rust
-pub extern fn rust_main() {
+pub extern fn rust_init() {
     let x = ["Hello", "World", "!"];
     let y = x;
 }
@@ -257,7 +258,7 @@ and an `extern crate` definition in our `src/lib.rs`:
 extern crate rlibc;
 
 #[no_mangle]
-pub extern fn rust_main() {
+pub extern fn rust_init() {
 ...
 ```
 
@@ -338,7 +339,7 @@ Let's get Hello World printing into our VGA buffer from Rust:
 
 ```rust
 #[no_mangle]
-pub extern fn rust_main() {
+pub extern fn rust_init() {
     // ATTENTION: we have a very small stack and no guard page
 
     let hello = b"Hello World!";
