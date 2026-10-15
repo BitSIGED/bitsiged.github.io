@@ -47,6 +47,28 @@ crate-type = ["staticlib"]
 
 If you want additional details on `Cargo.toml`, we recommend checking out the Cargo reference in the rust-lang docs [here](https://doc.rust-lang.org/cargo/reference/index.html).
 
+### Adding .cargo
+
+We'll also need to add another directory at the root of our project, titled `.cargo`. Inside of `.cargo`, create a `config.toml` file with the following contents:
+```toml
+[unstable]
+json-target-spec = true
+build-std-features = ["compiler-builtins-mem"]
+#build-std = ["core", "compiler_builtins"]
+
+
+# when we renable the allocator 
+build-std = ["core", "compiler_builtins", "alloc"]
+
+[build]
+target = "x86_64-bitos.json"
+
+[target.'cfg(target_os = "none")']
+runner = "bootimage runner"
+```
+
+
+
 ### Rust 101 - an aside
 *Note:* This is not a guide that will teach you Rust. We will try to explain as much as possible as we go along, but there are parts where we expect you to use Google if you don't fully understand something; we can't explain every single snippet of code. If you have experience with langs like C, C++, you should find Rust not extremely different, but there are some fundamental differences you should know about:
 
@@ -66,13 +88,19 @@ The main idea we want you to take away from Rust vs other low level langs is tha
 Now, we want to place our root source file in `src/lib.rs`:
 ```rust
 #![feature(lang_items)]
+#![allow(internal_features)]
 #![no_std]
 
-#[no_mangle]
-pub extern fn rust_init() {}
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_init() {}
 
-#[lang = "eh_personality"] #[no_mangle] pub extern fn eh_personality() {}
-#[lang = "panic_fmt"] #[no_mangle] pub extern fn panic_fmt() -> ! {loop{}}
+#[lang = "eh_personality"]
+pub extern "C" fn eh_personality() {}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
 ```
 
 - `#!` defines an *attribute* of the current module. Since we're at the root module, the attributes apply to the [crate](https://doc.rust-lang.org/book/ch07-01-packages-and-crates.html) itself (a crate being the smallest amount of code that the Rust compiler considers at a time).
@@ -83,7 +111,7 @@ pub extern fn rust_init() {}
 - We mark `rust_init()` as `extern` to make it compatible to the standard C [calling convention](https://doc.rust-lang.org/std/keyword.extern.html).
 - The `lang` attribute defines a Rust [language item](https://doc.rust-lang.org/1.10.0/book/lang-items.html) (basically a way to make the `rustc` compiler know that certain operations exist)
 - `eh_personality` function is used for us to tell Rust how to handle stack [unwinding](https://doc.rust-lang.org/nomicon/unwinding.html) on a `panic!`. At the moment, we leave this empty.
-- `panic_fmt` function is the entry point on panic (i.e. what we do when a panic occurs). Again, we can't do much useful stuff here yet, so we just make sure that it doesn't return anything by looping (and use the `!` return type to specify a no-return type).
+- `panic_handler` function is the entry point on panic (i.e. what we do when a panic occurs). Again, we can't do much useful stuff here yet, so we just make sure that it doesn't return anything by looping (and use the `!` return type to specify a no-return type).
 
 ## Building Rust
 
@@ -164,63 +192,67 @@ By using such SIMD standards, programs can often speed up significantly. Good co
 
 However, the large SIMD registers lead to problems in OS kernels. The reason is that the kernel has to backup all registers that it uses on each hardware interrupt (recall what we were talking about with PCBs). So if the kernel uses SIMD registers, it has to backup a lot more data, which noticeably decreases performance. To avoid this performance loss, we disable the `sse` and `mmx` features (the `avx` feature is disabled by default).
 
-### Compiling
-
-To build our kernel for our new target, we pass the configuration file’s name as --target argument. You may have a bug where the `RUST_TARGET_PATH` variable isn't set properly, so we'll have to set it to the current working directory. Try running this command:
-
-`RUST_TARGET_PATH=$(pwd) cargo build --target x86_64-your_os_name`
-
-You're likely to get the following error:
-
-```
-error[E0463]: can't find crate for `core`
-  |
-  = note: the `x86_64-your_os_name` target may not be installed
-```
-
-The error tells us that the Rust compiler no longer finds the core library. The core library is implicitly linked to all `no_std` crates and contains things such as `Result`, `Option`, and iterators.
-
-The problem is that the core library is distributed together with the Rust compiler as a *precompiled* library. So it is only valid for the underlying host triple (e.g., `x86_64-unknown-linux-gnu`) but not for our custom target. To compile code for other targets, we'll have to recompile code for them first as well!
-
-That's where [xargo](https://github.com/japaric/xargo) comes in, which is a wrapper for cargo that makes cross compilation easier. Install it with (we'll need rust-src as well as it's a xargo dependency):
-
-- `cargo install xargo`
-- `rustup component add rust-src`
-
-Xargo is *“a drop-in replacement for cargo”*, so every cargo command also works with xargo. However, the build command gains additional functionality: `xargo build` will automatically cross compile the core library when compiling for custom targets.
-
-Let's try running it:
-
-```bash
-> RUST_TARGET_PATH=$(pwd) xargo build --target=x86_64-[your_os_name]
-   Compiling core v0.0.0 (file:///…/rust/src/libcore)
-    Finished release [optimized] target(s) in 22.87 secs
-   Compiling your_os_name v0.1.0 (file:///…/your_os_name/tags)
-    Finished dev [unoptimized + debuginfo] target(s) in 0.29 secs
-```
-
-It worked! We were able to cross compile `core` for our custom target and then compiled our OS crate. After compilation, we can find a static library at `target/x86_64-[your_os_name]/debug/lib[your_os_name].a` which can be linked with our assembly kernel.
-
 ## Integrating Rust
 
 Let’s try to integrate our Rust library into our assembly kernel so that we can call the rust_init function. For that we need to pass the `lib[your_os_name].a` file to the linker, together with the assembly object files. To do this, we'll extend our makefile:
 
 ```Makefile
-# ...
+arch ?= x86_64
+kernel := build/kernel-$(arch).bin
+iso := build/os-$(arch).iso
+
+linker_script := src/arch/$(arch)/linker.ld
+grub_cfg := src/arch/$(arch)/grub.cfg
+# Some systems have grub-mkrescue2 instead of grub-mkrescue, so we check for both
+grub_mkrescue := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
+assembly_source_files := $(wildcard src/arch/$(arch)/*.asm)
+assembly_object_files := $(patsubst src/arch/$(arch)/%.asm, \
+    build/arch/$(arch)/%.o, $(assembly_source_files))
 target ?= $(arch)-your_os_name
 rust_os := target/$(target)/debug/libyour_os_name.a
-# ...
-.PHONY: all clean run iso kernel
-# ...
-$(kernel): kernel $(rust_os) $(assembly_object_files) $(linker_script)
-	@ld -n -T $(linker_script) -o $(kernel) \
-		$(assembly_object_files) $(rust_os)
 
-kernel:
-	@RUST_TARGET_PATH=$(shell pwd) xargo build --target $(target)
+.PHONY: all clean run iso debug gdb
+
+all: $(kernel)
+
+clean:
+    @cargo +nightly clean
+    @rm -rf build
+    @rm -f qemu.log
+
+run: $(iso)
+    @qemu-system-x86_64 -cdrom $(iso)
+
+debug: $(iso)
+    @qemu-system-x86_64 -cdrom $(iso) -s -S
+
+gdb:
+    @rust-gdb build/kernel-x86_64.bin -ex "target remote :1234"
+
+iso: $(iso)
+
+$(iso): $(kernel) $(grub_cfg)
+    @mkdir -p build/isofiles/boot/grub
+    @cp $(kernel) build/isofiles/boot/kernel.bin
+    @cp $(grub_cfg) build/isofiles/boot/grub
+    @if [ -z "$(grub_mkrescue)" ]; then \
+        echo "error: grub2 mkrescue is required to build the ISO"; \
+        exit 127; \
+    fi
+    @$(grub_mkrescue) -o $(iso) build/isofiles 2> /dev/null
+    @rm -r build/isofiles
+
+$(kernel): $(rust_os) $(assembly_object_files) $(linker_script)
+    @ld -n -T $(linker_script) -o $(kernel) \
+        $(assembly_object_files) $(rust_os)
+
+$(rust_os): Cargo.toml src/lib.rs x86_64-your_os_name.json .cargo/config.toml
+    @cargo +nightly build -Zbuild-std=core,compiler_builtins,alloc --target $(target).json
+
+build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
+    @mkdir -p $(shell dirname $@)
+    @nasm -felf64 $< -o $@
 ```
-
-We add a new kernel target that just executes `xargo build` and modify the `$(kernel)` target to link the created static lib. We also add the new `kernel` target to the `.PHONY` list, since it does not belong to a file with that name.
 
 ### Calling Rust
 
