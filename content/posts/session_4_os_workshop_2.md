@@ -164,14 +164,14 @@ However, the large SIMD registers lead to problems in OS kernels. The reason is 
 
 To build our kernel for our new target, we pass the configuration file’s name as --target argument. You may have a bug where the `RUST_TARGET_PATH` variable isn't set properly, so we'll have to set it to the current working directory. Try running this command:
 
-`RUST_TARGET_PATH=$(pwd) cargo build --target x86_64-blog_os`
+`RUST_TARGET_PATH=$(pwd) cargo build --target x86_64-your_os_name`
 
 You're likely to get the following error:
 
 ```
 error[E0463]: can't find crate for `core`
   |
-  = note: the `x86_64-blog_os` target may not be installed
+  = note: the `x86_64-your_os_name` target may not be installed
 ```
 
 The error tells us that the Rust compiler no longer finds the core library. The core library is implicitly linked to all `no_std` crates and contains things such as `Result`, `Option`, and iterators.
