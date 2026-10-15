@@ -373,8 +373,39 @@ Since we still use the small 64 byte stack, we must be careful not to overflow i
 
 So far, we've been printing to our screen by writing a bunch of magic bits to some magic memory location and doing all sorts of finickity 'translations' manually to get our VGA buffer printing. The second half of this workshop will now be about creating an abstraction for the VGA text buffer so that we can print strings in different colours and do so via a simple interface, in, you guessed it, Rust!
 
-# VGA Text Buffer with Rust Macros
+# VGA Text Buffer with Rust
 
+## The VGA Text Buffer
+
+## A basic Rust Module
+
+### Colours
+
+### The Text Buffer
+
+## Printing Characters
+
+### Cannot move out of borrowed content
+
+### Volatile
+
+## Printing Strings
+
+### Supporting formatting macros
+
+### Newlines
+
+## Providing an Interface
+
+## A println macro
+
+### Clearing the screen
+
+### Hello World using println
+
+### Deadlocks
+
+### Fixing deadlocks
 
 
 # End of Post
