@@ -291,7 +291,7 @@ However, let's do some build automation first as typing out all those commands e
 
 Then save the Makefile with this content (this is a custom Makefile written by **Archie** that specifically checks for systems that may need to use `grub2-mkrescue` vs `grub-mkrescue`):
 
-```Make
+```Makefile
 arch ?= x86_64
 kernel := build/kernel-$(arch).bin
 iso := build/os-$(arch).iso
