@@ -377,23 +377,323 @@ So far, we've been printing to our screen by writing a bunch of magic bits to so
 
 ## The VGA Text Buffer
 
+The text buffer starts at physical address `0xb8000`, has 25 rows and 80 columns and each screen character has the following format:
+
+| Bit(s) | Value             |
+|--------|-------------------|
+| 0-7    | ASCII Code        |
+| 8-11   | Foreground Colour |
+| 12-14  | Background Colour |
+| 15     | Blink             |
+
+We can use any of the following colours for the foreground and/or background:
+
+| Number | Colour     | Number + Bright Bit | Bright Colour |
+|--------|------------|---------------------|---------------|
+| 0x0    | Black      | 0x8                 | Dark Gray     |
+| 0x1    | Blue       | 0x9                 | Light Blue    |
+| 0x2    | Green      | 0xa                 | Light Green   |
+| 0x3    | Cyan       | 0xb                 | Light Cyan    |
+| 0x4    | Red        | 0xc                 | Light Red     |
+| 0x5    | Magenta    | 0xd                 | Pink          |
+| 0x6    | Brown      | 0xe                 | Yellow        |
+| 0x7    | Light Gray | 0xf                 | White         |
+
+Bit 4 is the *bright Bit*, which turns blue into light blue, green into light green, etc. It cannot be used in background colour as the bit there is used to control if the text should blink. If you want to use a light background (e.g. white), you'll have to disable blinking through a [BIOS function](http://www.ctyme.com/intr/rb-0117.htm).
+
 ## A basic Rust Module
+
+Now that we're familiar with how the VGA buffer works, we can create a Rust module to handle printing:
+
+```rust
+// in src/lib.rs
+mod vga_buffer;
+```
+
+The content of this module can live in either `src/vga_buffer.rs` or `src/vga_buffer/mod.rs`. As we'll want to divide up our code into submodules, we'll want to create the `src/vga_buffer` directory.
 
 ### Colours
 
+Create a new file at `src/vga_buffer/colour.rs`, and paste the following code inside:
+
+```rust
+#[allow(dead_code)]
+#[repr(u8)]
+pub enum Color {
+    Black      = 0,
+    Blue       = 1,
+    Green      = 2,
+    Cyan       = 3,
+    Red        = 4,
+    Magenta    = 5,
+    Brown      = 6,
+    LightGray  = 7,
+    DarkGray   = 8,
+    LightBlue  = 9,
+    LightGreen = 10,
+    LightCyan  = 11,
+    LightRed   = 12,
+    Pink       = 13,
+    Yellow     = 14,
+    White      = 15,
+}
+```
+
+- We use a C-like enum to specify the number for each colour
+- `repr(u8)` attribute will make each enum variant be stored as a `u8` (no `u4` type in Rust)
+- `allow(dead_code)` attribute disables warnings from the compiler about unused variants
+
+Let's create a struct titled `VgaAttribute` that we'll use to store a full colour code that represents foreground + background colour, and whether or not our text is blinking.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)] // <-- don't worry about this for now
+#[repr(u8)]
+#[allow(dead_code)]
+pub enum Colour {
+    Black = 0,
+    Blue = 1,
+    Green = 2,
+    Cyan = 3,
+    Red = 4,
+    Magenta = 5,
+    Brown = 6,
+    LightGray = 7,
+    DarkGray = 8,
+    LightBlue = 9,
+    LightGreen = 10,
+    LightCyan = 11,
+    LightRed = 12,
+    Pink = 13,
+    Yellow = 14,
+    White = 15,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)] // <-- don't worry about this for now
+#[repr(transparent)]
+pub struct VgaAttribute(u8);
+
+impl VgaAttribute {
+    #[allow(dead_code)]
+    pub const fn new(blink: bool, fg: Colour, bg: Colour) -> Self {
+        Self(((blink as u8) << 7) | (((bg as u8) & 0x07) << 4) | ((fg as u8) & 0x0F))
+    }
+
+    pub const fn from_colour(fg: Colour, bg: Colour) -> Self {
+        Self((((bg as u8) & 0x07) << 4) | ((fg as u8) & 0x0F))
+    }
+}
+```
+
+The `VgaAttribute` is a new type built on top of `u8`, and contains the full colour byte, containing foreground + background color and blink status. The new function is a [const](https://github.com/rust-lang/rfcs/blob/master/text/0911-const-fn.md) function to allow it in static initializers. As const functions are unstable, we need to add the `const_fn` feature in `src/lib.rs`:
+
+```rust
+..
+#![no_std]
+#![feature(const_fn)] <-- add this
+..
+```
+
+`from_colour` is just an alternative `new` function, where we don't worry about the blink bit at all. This is in case we want light background colours.
+
 ### The Text Buffer
+
+We'll now want to add structs that can represent a screen character and the text buffer. Create a new file at `src/vga_buffer/buffer.rs` with the following code:
+
+```rust
+use super::VgaAttribute;
+use volatile::Volatile; // <-- don't worry about this for now
+
+pub(super) const BUFFER_HEIGHT: usize = 25;
+pub(super) const BUFFER_WIDTH: usize = 80;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)] // <-- don't worry about this for now
+#[repr(C)]
+pub(super) struct ScreenChar {
+    pub(super) ascii_character: u8,
+    pub(super) colour_code: VgaAttribute,
+}
+
+#[repr(transparent)]
+pub(super) struct Buffer {
+    pub(super) chars: [[Volatile<ScreenChar>; BUFFER_WIDTH]; BUFFER_HEIGHT],
+}
+```
+
+Some details:
+- `repr(C)` means we want our struct's to have a defined field ordering (like they do in C). Rust doesn't have field orderings by default.
+- `pub(super)` is used to make items visible to the parent module; since we're splitting our VGA buffer code across multiple files, it'd be good to reuse the definitions we use here instead of redefining them in each file..
+- `ScreenChar` contains two structs, one for which ASCII character we're using, and one for the colour code (using `VgaAttribute` defined in `colour.rs`)
+- `BUFFER_HEIGHT` and `BUFFER_WIDTH` are the maximum lengths of the height and width of the VGA text buffer. This means we can print in 25 rows, and 80 columns.
+- Don't worry about things like `Volatile` and the `derive` for now; we'll cover those later.
+
+Now, once more, we'll make a new file at `/src/vga_buffer/writer.rs` with the following code to start with:
+
+```rust
+use core::fmt; // <-- don't worry about this for now
+
+use lazy_static::lazy_static; // <-- don't worry about this for now
+use spin::Mutex; // <-- don't worry about this for now
+
+use super::buffer::{BUFFER_HEIGHT, BUFFER_WIDTH, Buffer, ScreenChar}; // import stuff from buffer.rs
+use super::{Colour, VgaAttribute}; // import stuff from colour.rs
+
+pub struct Writer {
+    pub(super) column_position: usize, // which column we're in
+    pub(super) colour_code: VgaAttribute,
+    pub(super) buffer: &'static mut Buffer,
+    pub(super) do_line_wrapping: bool, // line wrapping at end-of-width
+}
+```
+
+We'll be using the Writer type to actually write to the screen. Most of the struct is pretty self-explanatory, with the exception of `buffer: &'static mut Buffer`. Let's break that down:
+- `&` is a reference to some thing
+- `'` is what we prepend to any object to indicate lifetime - how *long* can this buffer be used for?
+- `'static`: when you pair the `'` with `static`, we are telling Rust that we want this buffer's lifetime to be the lifetime of the program itself; as long as the program runs, so does the buffer exist & can be used.
+- `mut` just marks the Buffer as mutable; i.e. we can change what's inside of it. This is pretty important, since an immutable buffer would be uneditable!
 
 ## Printing Characters
 
-### Cannot move out of borrowed content
+Now we'll want to implement behaviour for the `Writer` type. Let's create a method to write a single ASCII byte:
 
-### Volatile
+```rust
+impl Writer {
+    pub fn write_byte(&mut self, byte: u8) {
+        match byte {
+            b'\n' => self.new_line(), // new line chars
+            b'\t' => { // tab chars
+                let delta = 4 - (self.column_position % 4);
+                for _ in 0..delta {
+                    self.write_byte(b' ');
+                }
+            }
+            b'\r' => { // carriage returns
+                self.column_position = 0;
+            }
+            byte => {
+                if self.column_position >= BUFFER_WIDTH { // check if we're about to go over the edge
+                    if self.do_line_wrapping { self.new_line() } 
+                    else { return; } // Advanced buffering with scrolling can be implemented later..
+                                     // For now an overflow without linewrapping can be dropped
+                }
+                let row = BUFFER_HEIGHT - 1; // first line
+                let col = self.column_position;
+                let colour_code = self.colour_code;
+                self.buffer.chars[row][col].write(ScreenChar {
+                    ascii_character: byte,
+                    colour_code,
+                });
+                self.column_position += 1;
+            }
+        }
+    }
+    fn new_line(&mut self) {/* TODO */}
+}
+```
+
+Hopefully the code above isn't very hard to understand. When we want to write a byte (i.e. a character), we first try to match into a newline, tab or carriage return character to handle those separately. Otherwise, we treat it as any other character. We call a newline if we're about to reach over the end of our BUFFER_WIDTH. Otherwise, for all chars, we get their row, column and colour_code and write this as a `ScreenChar` to the buffer. Afterwards, we increment the column (as we're moving onto the next char). Also, `.write()` is a method brought in by the `volatile` library, more on this later.
+
+### Why `derive Debug, Clone, Copy`?
+
+The code snippets where you've seen `#[derive(Debug, Clone, Copy)]` are necessary to implement debugging, cloning and copying traits for our custom structs. This is because Rust *moves* values by default instead of copying them, which would give us a bunch of borrow-checker errors if we left it unhandled. By using `Clone`, we're telling Rust to clone the struct when its being moved about, we add `Copy` in for [good practice](https://doc.rust-lang.org/core/marker/trait.Copy.html#when-should-my-type-be-copy) and `Debug` for debugging purposes (if we ever need them).
+
+### What's up with Volatile?
+
+Ok, so we've explained the `Debug, Clone, Copy` stuff, but what about the mysterious `Volatile?`. The TLDR is this: compilers like to optimize things, some more aggressively than others. We can't guarantee that for future Rust compilers, their optimization which is meant to be helpful, doesn't break things! Consider that we write to `Buffer` and never read from it again; an aggressive optimization that a compiler might implement is to get rid of this entirely, as it isn't aware that writing to the `Buffer` prints characters onto the screen. That's why we use `Volatile`: we're telling Rust that our *writes* are `Volatile`, that meaning they have side effects that the compiler may not be aware of, and hence should NOT optimize away. You'll need to add the following lines to make `Volatile` work properly:
+
+```toml
+# in Cargo.toml
+
+[dependencies]
+volatile = "0.1.0"
+```
+
+and...
+
+```rust
+// in src/lib.rs
+
+extern crate volatile;
+```
+
+Furthermore,  this crate (this is how packages are called in the Rust world) provides a Volatile wrapper type with `read` and `write` methods. These methods internally use the read_volatile and write_volatile functions of the standard library and thus guarantee that the reads/writes are not optimized away. That's why we use `.write()` instead of a simple `=` assignment in our `write_byte` function; to make sure the writing isn't optimized away.
 
 ## Printing Strings
 
+Surely it's a pain to just be printing each byte individually. To print whole strings, we can write a string, convert it to bytes, and then call `write_byte` repeatedly until we exhaust the string.
+
+```rust
+Impl Writer {
+    ...
+    pub fn write_string(&mut self, s: &str) {
+        for byte in s.bytes() {
+            match byte {
+                0x20..=0x7e | b'\n' | b'\t' | b'\r' => self.write_byte(byte),
+                _ => self.write_byte(0xfe), // non-valid chars
+            }
+        }
+    }
+}
+```
+
 ### Supporting formatting macros
 
+It would be nice to support Rust’s formatting macros, too. That way, we can easily print different types like integers or floats. To support them, we need to implement the `core::fmt::Write` trait. The only required method of this trait is `write_str` that looks quite similar to our `write_str` method. To implement the trait, we just need to make a copy of it and place it into an `impl fmt::Write for Writer` block and add a return type:
+
+```rust
+// in writer.rs
+
+impl fmt::Write for Writer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.write_string(s);
+        Ok(())
+    }
+}
+```
+The `Ok(())` is just a `Ok` Result containing the `()` type. We can drop the pub because trait methods are always public.
+
+Now we can use Rust's built-in `write!` / `writeln!` formatting macros (no need to copy this):
+
+```rust
+use core::fmt::Write;
+let mut writer = Writer {...};
+writer.write_byte(b'H');
+writer.write_str("ello! ");
+write!(writer, "The numbers are {} and {}", 42, 1.0/3.0);
+```
+
+This would produce a `Hello! The numbers are 42 and 0.3333333333333333` at the bottom of the screen.
+
 ### Newlines
+
+Right now, we just ignore newlines and characters that don’t fit into the line anymore. Instead we want to move every character one line up (the top line gets deleted) and start at the beginning of the last line again. To do this, we add an implementation for the `new_line` and `clear_row` methods of `Writer`:
+
+```rust
+// in `impl Writer`
+    fn new_line(&mut self) {
+        for row in 1..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                self.buffer.chars[row - 1][col].write(self.buffer.chars[row][col].read())
+            }
+        }
+        self.clear_row(BUFFER_HEIGHT - 1);
+        self.column_position = 0;
+    }
+
+    fn clear_row(&mut self, row: usize) {
+        let blank = ScreenChar {
+            ascii_character: b' ',
+            colour_code: self.colour_code,
+        };
+        for col in 0..BUFFER_WIDTH {
+            self.buffer.chars[row][col].write(blank);
+        }
+    }
+}
+```
+
+We iterate over all screen characters and move each characters one row up. Note that the range notation `(..)` is exclusive the upper bound. We also omit the 0th row (the first range starts at `1`) because it’s the row that is shifted off screen.
+
+Then, the `clear_row` method clears a row by overwriting all of its characters with a space character.
 
 ## Providing an Interface
 
