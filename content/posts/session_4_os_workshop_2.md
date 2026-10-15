@@ -289,6 +289,8 @@ pub extern fn rust_init() {
 
 When we test it using `make run`, it fails with `undefined reference to 'memcpy'`. The `memcpy` function is one of the basic functions of the C library (`libc`). Usually the libc crate is linked to every Rust program together with the standard library, but we opted out through `#![no_std]`. We could try to fix this by adding the *libc* crate as extern crate. But `libc` is just a wrapper for the **system** `libc`, for example `glibc` on Linux, so this won’t work for us. Instead we need to recreate the basic `libc` functions such as `memcpy`, `memmove`, `memset`, and `memcmp` in Rust.
 
+**NOTE:** It might not fail anymore, in fact the nightly compiler might be optimizing memcpy away. We WILL STILL NEED `rlibc`, so keep following these steps!
+
 **rlibc - a convenient saviour**
 
 Fortunately there already is a crate for that: `rlibc`. When we look at its [source code](https://github.com/alexcrichton/rlibc/blob/defb486e765846417a8e73329e8c5196f1dca49a/src/lib.rs) we see that it contains no magic, just some *raw pointer* operations in a while loop. To add `rlibc` as a dependency we just need to add two lines to the `Cargo.toml`:
@@ -308,52 +310,6 @@ extern crate rlibc;
 pub extern fn rust_init() {
 ...
 ```
-
-Now `make run` doesn’t complain about `memcpy` anymore. Instead it will show a pile of new ugly linker errors (WE LOVE LOW-LEVEL DEV!!!):
-```
-target/x86_64-your_os_name/debug/libyour_os_name.a(core-92335f822fa6c9a6.0.o):
-    In function `_$LT$f32$u20$as$u20$core..num..dec2flt..
-        rawfp..RawFloat$GT$::from_int::h50f7952efac3fdca':
-    core.cgu-0.rs:(.text._ZN59_$LT$f32$u20$as$u20$core..num..dec2flt..
-        rawfp..RawFloat$GT$8from_int17h50f7952efac3fdcaE+0x2):
-    undefined reference to `__floatundisf'
-target/x86_64-your_os_name/debug/libyour_os_name.a(core-92335f822fa6c9a6.0.o):
-    In function `_$LT$f64$u20$as$u20$core..num..dec2flt..rawfp..
-        RawFloat$GT$::from_int::h12a81f175246914a':
-    core.cgu-0.rs:(.text._ZN59_$LT$f64$u20$as$u20$core..num..dec2flt..rawfp..
-        RawFloat$GT$8from_int17h12a81f175246914aE+0x2):
-    undefined reference to `__floatundidf'
-target/x86_64-your_os_name/debug/libyour_os_name.a(core-92335f822fa6c9a6.0.o):
-    In function `core::num::from_str_radix::h09b12650704e0508':
-    core.cgu-0.rs:(.text._ZN4core3num14from_str_radix
-        17h09b12650704e0508E+0xcf):
-    undefined reference to `__muloti4'
-...
-```
-
-**-gc-sections**
-
-The new errors are linker errors about various missing functions such as `__floatundisf` or `__muloti4`. These functions are part of *LLVM’s `compiler-rt` builtins* and are normally linked by the standard library. For `no_std` crates like ours, one has to link the `compiler-rt` library manually. Unfortunately, this library is implemented in C and the build process is a bit cumbersome. Alternatively, there is the [compiler-builtins](https://github.com/rust-lang-nursery/compiler-builtins) crate that tries to port the library to Rust, but we're not sure if it's ready-for-use yet.
-
-So instead, we opt for a simpler solution. Our kernel doesn’t really need any of those functions yet. So we can just tell the linker to remove unused program sections and hopefully all references to these functions will disappear. Removing unused sections is generally a good idea as it reduces kernel size. The magic linker flag for this is `--gc-sections`, which stands for “garbage collect sections”. Let’s add it to the `$(kernel)` target in our `Makefile`:
-
-```Makefile
-$(kernel): xargo $(rust_os) $(assembly_object_files) $(linker_script)
-	@ld -n --gc-sections -T $(linker_script) -o $(kernel) \
-		$(assembly_object_files) $(rust_os)
-```
-
-Now we can do a `make run` again and it compiles without errors again. However, it doesn’t boot anymore:
-`GRUB error: no multiboot header found.`
-
-What? Our multiboot header is right there? What happened? Well, the linker removed unused sections, and since we don’t use the Multiboot section anywhere, `ld` removes it too. So we need to tell the linker explicitly that it should keep the multiboot header. The `KEEP` command does exactly that, so we add it to the linker script (`linker.ld`):
-```
-.boot :
-{
-    /* ensure that the multiboot header is at the beginning */
-    KEEP(*(.multiboot_header))
-}
-``` 
 
 And for sanity's sake, you should also add this line to your `x86_64_your_os_name.json` file:
 
