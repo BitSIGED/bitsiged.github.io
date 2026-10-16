@@ -715,7 +715,7 @@ features = ["spin_no_std"]
 ```
 and using it in the code 
 ```rust
-// src/vga_buff/writer.rs
+// src/vga_buffer/writer.rs
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -740,7 +740,7 @@ and activate it with the following line in `src/lib.rs`
 ```rust
 extern crate spin;
 ```
-now we can use it in the `src/vga_buff/writer.rs`.  
+now we can use it in the `src/vga_buffer/writer.rs`.  
 ```rust
 use spin::Mutex;
 
@@ -755,7 +755,7 @@ lazy_static! {
 }
 ```
 
-To use our writer, we need to export it from `src/vga_buff/mod.rs`:
+To use our writer, we need to export it from `src/vga_buffer/mod.rs`:
 ```rust
 mod buffer;
 mod colour;
@@ -781,7 +781,7 @@ Although we *can* now use the `WRITER` in a thread safe way it's in no way to er
 To start we can create a nice print function that does all of the locking and formating .
 
 ```rust
-// src/vga_buff/mod.rs 
+// src/vga_buffer/mod.rs 
 
 use core::fmt;
 
@@ -795,7 +795,7 @@ pub fn _print(args: fmt::Arguments) {
 ```rust
 #[macro_export]
 macro_rules! print {
-    ($($arg:tt)*) => ($crate::vga_buff::_print(format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
 }
 
 #[macro_export]
