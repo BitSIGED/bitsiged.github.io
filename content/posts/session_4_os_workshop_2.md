@@ -423,7 +423,7 @@ Create a new file at `src/vga_buffer/colour.rs`, and paste the following code in
 ```rust
 #[allow(dead_code)]
 #[repr(u8)]
-pub enum Color {
+pub enum Colour {
     Black      = 0,
     Blue       = 1,
     Green      = 2,
@@ -488,14 +488,7 @@ impl VgaAttribute {
 }
 ```
 
-The `VgaAttribute` is a new type built on top of `u8`, and contains the full colour byte, containing foreground + background color and blink status. The new function is a [const](https://github.com/rust-lang/rfcs/blob/master/text/0911-const-fn.md) function to allow it in static initializers. As const functions are unstable, we need to add the `const_fn` feature in `src/lib.rs`:
-
-```rust
-..
-#![no_std]
-#![feature(const_fn)] <-- add this
-..
-```
+The `VgaAttribute` is a new type built on top of `u8`, and contains the full colour byte, containing foreground + background color and blink status. The new function is a [const](https://github.com/rust-lang/rfcs/blob/master/text/0911-const-fn.md) function to allow it in static initializers.
 
 `from_colour` is just an alternative `new` function, where we don't worry about the blink bit at all. This is in case we want light background colours.
 
@@ -705,8 +698,9 @@ We now need global writer that can be used by other modules, to do this we make 
 ```rust
 pub static WRITER: Writer = Writer {
     column_position: 0,
-    color_code: ColorCode::new(Color::White, Color::Black),
-    buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) },
+    colour_code: VgaAttribute::new(Colour::White, Colour::Black),
+    buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    do_line_wrapping: true,
 };
 ```
 
@@ -721,14 +715,15 @@ features = ["spin_no_std"]
 ```
 and using it in the code 
 ```rust
-// src/vga_buff/mod.rs
+// src/vga_buff/writer.rs
 use lazy_static::lazy_static;
 
 lazy_static! {
     pub static ref WRITER: Writer = Writer {
         column_position: 0,
-        color_code: ColorCode::new(Color::Yellow, Color::Black),
+        colour_code: VgaAttribute::new(Colour::LightGreen, Colour::Black),
         buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+        do_line_wrapping: true,
     };
 }
 ```
@@ -739,23 +734,34 @@ To use it we add the spin crate (to avoid us implemnting it now, we will have to
 ```toml
 [dependencies]
 rlibc = "0.1.4"
-spin = "0.4.5"
+spin = "0.12.3"
 ```
 and activate it with the following line in `src/lib.rs`
 ```rust
 extern crate spin;
 ```
-now we can use it in the `src/vga_buff/writer.rs`. However  
+now we can use it in the `src/vga_buff/writer.rs`.  
 ```rust
 use spin::Mutex;
 
 // Existing code ...
+lazy_static! {
+    pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
+        column_position: 0,
+        colour_code: VgaAttribute::new(Colour::LightGreen, Colour::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+        do_line_wrapping: true,
+    });
+}
+```
 
-pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
-    column_position: 0,
-    color_code: ColorCode::new(Color::LightGreen, Color::Black),
-    buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) },
-});
+To use our writer, we need to export it from `src/vga_buff/mod.rs`:
+```rust
+mod buffer;
+mod colour;
+mod writer;
+
+pub use writer::WRITER;
 ```
 
 
