@@ -27,16 +27,16 @@ Continuing on with Phil Oppermann's amazing blog, we'll now be installing Rust a
 
 ## Installing Rust
 
-Since we'll be using a lot of unstable features, we'll need to use **nightly** for its compiler. To do this, we'll managae our Rust installations with the use of [rustup](https://rustup.rs/). To tell rustup that we want to use nightly for our current directory, we run `rustup override nightly` in the terminal.
+Since we'll be using a lot of unstable features, we'll need to use **nightly** for its compiler. To do this, we'll managae our Rust installations with the use of [rustup](https://rustup.rs/). To tell rustup that we want to use nightly for our current directory, we run `rustup override set nightly` in the terminal.
 
 ## Creating a Cargo project
 
 [Cargo](https://doc.crates.io/guide.html) is a Rust package manager used for just about any Rust project out there. Since our project folder already exists, we'll set it up as a Cargo project manually by adding a cargo config file named `Cargo.toml`:
 ```toml
 [package]
-name = "your_os_name"
+name = "bitos"
 version = "0.1.0"
-authors = ["your_name_here"]
+edition = "2024"
 
 [lib]
 crate-type = ["staticlib"]
@@ -91,8 +91,14 @@ Now, we want to place our root source file in `src/lib.rs`:
 #![allow(internal_features)]
 #![no_std]
 
+extern crate rlibc;
+
+mod vga_buff;
+
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_init() {}
+pub extern "C" fn rust_init() {
+    println!("Hello World{}", "!");
+}
 
 #[lang = "eh_personality"]
 pub extern "C" fn eh_personality() {}
@@ -115,7 +121,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 ## Building Rust
 
-We can now build our project by running `cargo build` which creates a static library at `target/debug/lib[your_os_name].a`. However, the resulting library will have been built specific to our **host operating system** (the machine that we're writing this on). If you want to run it solely on your own machine, this isn't much of an issue, but in the interests of standardisation, **let's define properties of our target system**:
+We can now build our project by running the BitOS build command, which creates a static library for the custom target. A normal `cargo build` would target the host operating system instead.
 
 - **x86_64**: our target CPU is an `x86_64` CPU.
 - **No operating system**: Our target doesn't run any operating system (as that's what we're writing), so the compiler shouldn't assume any OS-specific functionality
@@ -159,14 +165,14 @@ With the properties of our target system in mind, we can use a JSON configuratio
 
 ### Our Kernel Target Specification
 
-For our target system, we'll define the following JSON config in a file named `x86_64-[your_os_name].json`:
+For our target system, we'll define the following JSON config in a file named `x86_64-bitos.json`:
 ```json
 {
     "llvm-target": "x86_64-unknown-none",
     "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
     "arch": "x86_64",
     "target-endian": "little",
-    "target-pointer-width": 64,
+    "target-pointer-width": "64",
     "target-c-int-width": 32,
     "os": "none",
     "executables": true,
@@ -194,7 +200,7 @@ However, the large SIMD registers lead to problems in OS kernels. The reason is 
 
 ## Integrating Rust
 
-Let’s try to integrate our Rust library into our assembly kernel so that we can call the rust_init function. For that we need to pass the `lib[your_os_name].a` file to the linker, together with the assembly object files. To do this, we'll extend our makefile:
+Let’s try to integrate our Rust library into our assembly kernel so that we can call the `rust_init` function. BitOS links `libbitos.a` with the assembly object files:
 
 ```Makefile
 arch ?= x86_64
@@ -208,8 +214,8 @@ grub_mkrescue := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub
 assembly_source_files := $(wildcard src/arch/$(arch)/*.asm)
 assembly_object_files := $(patsubst src/arch/$(arch)/%.asm, \
     build/arch/$(arch)/%.o, $(assembly_source_files))
-target ?= $(arch)-your_os_name
-rust_os := target/$(target)/debug/libyour_os_name.a
+target ?= $(arch)-bitos
+rust_os := target/$(target)/debug/libbitos.a
 
 .PHONY: all clean run iso debug gdb
 
@@ -246,7 +252,7 @@ $(kernel): $(rust_os) $(assembly_object_files) $(linker_script)
     @ld -n -T $(linker_script) -o $(kernel) \
         $(assembly_object_files) $(rust_os)
 
-$(rust_os): Cargo.toml src/lib.rs x86_64-your_os_name.json .cargo/config.toml
+$(rust_os): Cargo.toml src/lib.rs x86_64-bitos.json .cargo/config.toml
     @cargo +nightly build -Zbuild-std=core,compiler_builtins,alloc --target $(target).json
 
 build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
@@ -257,31 +263,27 @@ build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
 ### Calling Rust
 
 Let's go back to our `longmode.asm` file (`long_mode_start`) and add the following:
-```rust
-extern rust_init        ; new
+```nasm
+extern rust_init
 
 bits 64
 long_mode_start:
     ...
 
-    ; call the rust initalisation code 
-    call rust_init      ; new
-
-    ; print `OKAY` to screen
-    mov rax, 0x2f592f412f4b2f4f
-    mov qword [0xb8000], rax
+    ; call the Rust initialisation code
+    call rust_init
     hlt
 ```
 
 By defining `rust_init` as `extern` we tell nasm that the function is defined in another file. As the linker takes care of linking them together, we’ll get a linker error if we have a typo in the name or forget to mark the rust function as `pub extern`.
 
-If we’ve done everything right, we should still see the green `OKAY` when executing `make run`. That means that we successfully called the Rust function and returned back to assembly.
+If we’ve done everything right, `rust_init` is called when executing `make run`. The current implementation prints through the Rust VGA writer and then returns to the assembly code, which halts.
 
 ### Linker Errors of doom and despair
 
 Try adding the following rust code to our `rust_init()` function in our `src/lib.rs` file:
 ```rust
-pub extern fn rust_init() {
+pub extern "C" fn rust_init() {
     let x = ["Hello", "World", "!"];
     let y = x;
 }
@@ -306,12 +308,12 @@ and an `extern crate` definition in our `src/lib.rs`:
 ...
 extern crate rlibc;
 
-#[no_mangle]
-pub extern fn rust_init() {
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_init() {
 ...
 ```
 
-And for sanity's sake, you should also add this line to your `x86_64_your_os_name.json` file:
+The target specification already sets this in `x86_64-bitos.json`:
 
 ```json
 {
@@ -328,43 +330,27 @@ Now, run `cargo clean` to force a recompile (to get rid of any unwind code left 
 > cargo clean
 > make run
    Compiling rlibc v1.0.0
-   Compiling your_os_name v0.1.0 (file://[path_to_your_os_name]/tags)
+   Compiling bitos v0.1.0
 warning: unused variable: `test` […]
 
     Finished dev [unoptimized + debuginfo] target(s) in 0.60 secs
 ```
 
-It worked! We no longer see linker errors, and our kernel prints `OKAY` again!
+It worked! We no longer see linker errors, and our kernel can call Rust code.
 
 ## Hello World at long last!
 
 Let's get Hello World printing into our VGA buffer from Rust:
 
 ```rust
-#[no_mangle]
-pub extern fn rust_init() {
-    // ATTENTION: we have a very small stack and no guard page
-
-    let hello = b"Hello World!";
-    let color_byte = 0x1f; // white foreground, blue background
-
-    let mut hello_colored = [color_byte; 24];
-    for (i, char_byte) in hello.into_iter().enumerate() {
-        hello_colored[i*2] = *char_byte;
-    }
-
-    // write `Hello World!` to the center of the VGA text buffer
-    let buffer_ptr = (0xb8000 + 1988) as *mut _;
-    unsafe { *buffer_ptr = hello_colored };
-
-    loop{}
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_init() {
+    println!("Hello World{}", "!");
 }
 ```
 
-- `b` prefix creates a *byte string*, which is just an array of `u8`s (unsigned 8 bit integers)
-- *enumerate* is an `Iterator` method that adds the current index `i` to elements
-- `buffer_ptr` is a raw pointer that points to the center of the VGA text buffer
-- Rust doesn't know the VGA buffer and so cannot guarantee that writing to the `buffer_ptr` is safe, so we tell Rust that we know what we're doing by wrapping it in an `unsafe{}` block.
+- `println!` is the macro exported by `vga_buff` and writes through the global, mutex-protected writer.
+- The writer accesses the VGA buffer at `0xb8000` and writes to the bottom row, scrolling when a newline is emitted.
 
 ### Stack Overflows
 *yes, like the website*
@@ -601,7 +587,7 @@ Ok, so we've explained the `Debug, Clone, Copy` stuff, but what about the myster
 # in Cargo.toml
 
 [dependencies]
-volatile = "0.1.0"
+volatile = "0.2.6"
 ```
 
 and...
@@ -619,7 +605,7 @@ Furthermore,  this crate (this is how packages are called in the Rust world) pro
 Surely it's a pain to just be printing each byte individually. To print whole strings, we can write a string, convert it to bytes, and then call `write_byte` repeatedly until we exhaust the string.
 
 ```rust
-Impl Writer {
+impl Writer {
     ...
     pub fn write_string(&mut self, s: &str) {
         for byte in s.bytes() {
@@ -694,19 +680,7 @@ Then, the `clear_row` method clears a row by overwriting all of its characters w
 
 ## Providing an Interface
 
-We now need global writer that can be used by other modules, to do this we make a static WRITER 
-```rust
-pub static WRITER: Writer = Writer {
-    column_position: 0,
-    colour_code: VgaAttribute::new(Colour::White, Colour::Black),
-    buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-    do_line_wrapping: true,
-};
-```
-
-However this wont work because it needs to be mutable so we can update the `column_position` we could make it a `static mut` however this would introduce race conditions when we start working with asnyc code. Additionally if we try compile this at the moment it will fail as rusts constant evaluator fails to realise that this is a one time initialisation that could be constant.  
-
-To resolve the constants issue we can use lazy statics, a library that lets statics be computed at runtime instead of compile time. 
+BitOS initializes the global writer with `lazy_static` and protects it with a spin-lock `Mutex`:
 
 ```toml
 [dependencies.lazy_static]
@@ -715,44 +689,33 @@ features = ["spin_no_std"]
 ```
 and using it in the code 
 ```rust
-// src/vga_buffer/writer.rs
+// src/vga_buff/writer.rs
 use lazy_static::lazy_static;
-
-lazy_static! {
-    pub static ref WRITER: Writer = Writer {
-        column_position: 0,
-        colour_code: VgaAttribute::new(Colour::LightGreen, Colour::Black),
-        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-        do_line_wrapping: true,
-    };
-}
-```
-
-Next to resolve the async issues we use a `Mutex` (mutual exclusion) which allows us to Lock a resource so only one thread can use it at a time. At the moment we don't have access to the more efficient Mutex implementations so instead we use a spin lock, which works by having a process continuously quering if the resource is now free. For self-explanatory reasons this isn't the best solution but its the only one we have access to at the moment.
-
-To use it we add the spin crate (to avoid us implemnting it now, we will have to later)
-```toml
-[dependencies]
-rlibc = "0.1.4"
-spin = "0.12.3"
-```
-and activate it with the following line in `src/lib.rs`
-```rust
-extern crate spin;
-```
-now we can use it in the `src/vga_buffer/writer.rs`.  
-```rust
 use spin::Mutex;
 
-// Existing code ...
 lazy_static! {
-    pub static WRITER: Mutex<Writer> = Mutex::new(Writer {
+    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
         column_position: 0,
-        colour_code: VgaAttribute::new(Colour::LightGreen, Colour::Black),
+        colour_code: VgaAttribute::from_colour(Colour::White, Colour::Black),
         buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
         do_line_wrapping: true,
     });
 }
+```
+
+The `Mutex` allows only one caller to access the writer at a time. The current implementation uses a spin lock, which repeatedly checks whether the resource is free.
+
+To use it we add the spin crate (to avoid us implemnting it now, we will have to later)
+```toml
+[dependencies]
+rlibc = "1.0"
+spin = "0.5.2"
+```
+Now we can lock it before writing:
+```rust
+use spin::Mutex;
+
+WRITER.lock().write_str("Hello again");
 ```
 
 To use our writer, we need to export it from `src/vga_buffer/mod.rs`:
@@ -767,25 +730,23 @@ pub use writer::WRITER;
 
 And we can now see it working in our main function
 ```rust
-pub extern fn rust_init() {
-    use core::fmt::Write;
-    vga_buffer::WRITER.lock().write_str("Hello again");
-    write!(vga_buffer::WRITER.lock(), ", some numbers: {} {}", 42, 1.337);
-    loop{}
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_init() {
+    println!("Hello World{}", "!");
 }
 ```
 
 ## A println macro
 Although we *can* now use the `WRITER` in a thread safe way it's in no way to ergonomicly use it.
 
-To start we can create a nice print function that does all of the locking and formating .
+To start we can create a nice print function that does all of the locking and formatting.
 
 ```rust
-// src/vga_buffer/mod.rs 
+// src/vga_buff/mod.rs
 
 use core::fmt;
 
-#[doc(hidden)] // hide this function from lsp's as were about to replace it with a better func
+#[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     WRITER.lock().write_fmt(args).unwrap();
