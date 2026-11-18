@@ -50,6 +50,7 @@ If you want additional details on `Cargo.toml`, we recommend checking out the Ca
 ### Adding .cargo
 
 We'll also need to add another directory at the root of our project, titled `.cargo`. Inside of `.cargo`, create a `config.toml` file with the following contents:
+
 ```toml
 [unstable]
 json-target-spec = true
@@ -67,8 +68,6 @@ target = "x86_64-bitos.json"
 runner = "bootimage runner"
 ```
 
-
-
 ### Rust 101 - an aside
 *Note:* This is not a guide that will teach you Rust. We will try to explain as much as possible as we go along, but there are parts where we expect you to use Google if you don't fully understand something; we can't explain every single snippet of code. If you have experience with langs like C, C++, you should find Rust not extremely different, but there are some fundamental differences you should know about:
 
@@ -83,14 +82,14 @@ Here's a helpful table graphic for those interested:
 
 The main idea we want you to take away from Rust vs other low level langs is that the most confusing part of these workshops will probably be us trying to appease the borrow checker, so bear with us! If you want to, you can read more about the borrow checker here: [LogRocket on the Rust Borrow Checker](https://blog.logrocket.com/introducing-rust-borrow-checker/). You can also find Rust docs [here](https://doc.rust-lang.org/stable/).
 
-### Final folder structure
-In this session, we will use something called a VGA buffer to print to the screen. To do this, we will have to create a new folder with some new files. Here is the final structure you should end up with.
+### Final (source) folder structure
+In this session, we will use a VGA buffer to print to the screen. To do this, we will have to create a new folder with some new files. Here is the final structure you should end up with.
 
 ```
 src
  ├── lib.rs
- ├─── arch
- |     └── ...
+ ├── arch
+ |    └── ...
  └── vga_buffer
         ├── buffer.rs
         ├── colour.rs
@@ -253,7 +252,7 @@ Ok, so we've explained the `Debug, Clone, Copy` stuff, but what about the myster
 
 ### Let's make VGA easier!
 
-Now that we created the colours, we can start and the screen, we can finally create the printing logic! 
+Now that we created the colours and the screen, we can finally create the printing logic! 
 
 Once more, we'll make a new file at `/src/vga_buffer/writer.rs` with the following code to start with:
 
@@ -403,6 +402,8 @@ Right now, we just ignore newlines and characters that don’t fit into the line
     }
 ```
 
+Notice that this code defines the first row as the top one of the screen. Hence clear_row will only be triggered once the row we write to is the last one of the screen.
+
 We iterate over all screen characters and move each characters one row up. Note that the range notation `(..)` is exclusive the upper bound. We also omit the 0th row (the first range starts at `1`) because it’s the row that is shifted off screen.
 
 Then, the `clear_row` method clears a row by overwriting all of its characters with a space character.
@@ -454,7 +455,7 @@ mod buffer;
 mod colour;
 mod writer;
 
-pub use colour::{Colour, VgaAttribute};
+use colour::{Colour, VgaAttribute};
 
 pub use writer::WRITER;
 ```
@@ -489,7 +490,6 @@ macro_rules! println {
 }
 ```
 
-
 ### Source File
 
 Now, we want to place our root source file in `src/lib.rs`:
@@ -502,7 +502,7 @@ mod vga_buffer;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_init() {
-    println!("Hello World{}", "!");
+    loop {}
 }
 
 #[lang = "eh_personality"]
@@ -526,12 +526,14 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 ## Building Rust
 
-We can now build our project by running the BitOS build command, which creates a static library for the custom target. A normal `cargo build` would target the host operating system instead.
+Now that the coding is done, we can update our Makefile to include it and build the rust. A normal `cargo build` would target the host operating system, so we cannot use it.
+
+Our target specifications are:
 
 - **x86_64**: our target CPU is an `x86_64` CPU.
 - **No operating system**: Our target doesn't run any operating system (as that's what we're writing), so the compiler shouldn't assume any OS-specific functionality
 - **Handles hardware interrupts**: Our kernel will need to handle asynchronous hardware interrupts at some point. This means that we'll have to disable a certain stack pointer optimization ([*the red zone*](https://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64#the-red-zone)), as it'd cause stack corruptions otherwise. 
-- **No SSE**: Our target might not have **SSE** support (SSE = Streaming SIMD Extensions). Even if it does, we don't want to use SSE instructions in our kernel as it makes interrupt handling muchb slower. More on this later..
+- **No SSE**: Our target might not have **SSE** support (SSE = Streaming SIMD Extensions). Even if it does, we don't want to use SSE instructions in our kernel as it makes interrupt handling muchb slower. More on this later...
 - **No hardware floats**: The `x86_64` architecture uses SSE instructions for floating point operations, which as said above, we're not gonna use. So we'll need to avoid hardware floating point operations in our kernel; instead, we'll use *soft floats*, which are basically software functions that emulate floating point operations using normal integers.
 
 ### What's the 'red zone'?
@@ -570,7 +572,7 @@ With the properties of our target system in mind, we can use a JSON configuratio
 
 ### Our Kernel Target Specification
 
-For our target system, we'll define the following JSON config in a file named `x86_64-bitos.json`:
+For our target system, we'll define the following JSON config in a file named `x86_64-bitos.json` in the root directory:
 ```json
 {
     "llvm-target": "x86_64-unknown-none",
@@ -674,6 +676,7 @@ extern rust_init
 bits 64
 long_mode_start:
     ...
+    mov qword [0xb8000], rax
 
     ; call the Rust initialisation code
     call rust_init
@@ -681,6 +684,31 @@ long_mode_start:
 ```
 
 By defining `rust_init` as `extern` we tell nasm that the function is defined in another file. As the linker takes care of linking them together, we’ll get a linker error if we have a typo in the name or forget to mark the rust function as `pub extern`.
+
+We also need to change a tiny thing in linker.ld:
+
+```
+ENTRY(start)
+
+SECTIONS {
+    . = 1M;
+
+    .boot :
+    {
+        /* ensure that the multiboot header is at the beginning */
+        KEEP(*(.multiboot_header)) ; KEEP() is new
+    }
+
+    .text :
+    {
+        *(.text)
+    }
+}
+```
+Here is the reason we need this change.
+We added the argument --gc-sections to our makefile which makes the linker discard every section that nothing references, starting from the entry point (`start`). We need it because the compiler_builtins library also contains unused f128 math code that references certain functions like `fmal`, which don't exist in our kernel. Not adding this argument would just throw an error. Another solution would be to define those functions ourself (with a loop that does nothing or something similar) but it just adds dead code to the kernel.
+
+Here is the thing tho: technically, .multiboot_header.asm is never referenced, and so it also gets discraded. KEEP makes sure we keep (;)) this code so that our kernel boots in the way we want.
 
 If we’ve done everything right, `rust_init` is called when executing `make run`. The current implementation prints through the Rust VGA writer and then returns to the assembly code, which halts.
 
@@ -694,7 +722,7 @@ pub extern "C" fn rust_init() {
 }
 ```
 
-When we test it using `make run`, it fails with `undefined reference to 'memcpy'`. The `memcpy` function is one of the basic functions of the C library (`libc`). Usually the libc crate is linked to every Rust program together with the standard library, but we opted out through `#![no_std]`. We could try to fix this by adding the *libc* crate as extern crate. But `libc` is just a wrapper for the **system** `libc`, for example `glibc` on Linux, so this won’t work for us. Instead we need to recreate the basic `libc` functions such as `memcpy`, `memmove`, `memset`, and `memcmp` in Rust.
+When we test it using `make run`, it sometimes fails with `undefined reference to 'memcpy'`. The `memcpy` function is one of the basic functions of the C library (`libc`). Usually the libc crate is linked to every Rust program together with the standard library, but we opted out through `#![no_std]`. We could try to fix this by adding the *libc* crate as extern crate. But `libc` is just a wrapper for the **system** `libc`, for example `glibc` on Linux, so this won’t work for us. Instead we need to recreate the basic `libc` functions such as `memcpy`, `memmove`, `memset`, and `memcmp` in Rust.
 
 **NOTE:** It might not fail anymore, in fact the nightly compiler might be optimizing memcpy away. We WILL STILL NEED `rlibc`, so keep following these steps!
 
@@ -747,6 +775,13 @@ pub extern "C" fn rust_init() {
 - `println!` is the macro exported by `vga_buffer` and writes through the global, mutex-protected writer.
 - The writer accesses the VGA buffer at `0xb8000` and writes to the bottom row, scrolling when a newline is emitted.
 
+Type the following command in your terminal. "Hello World!" should be on your OS screen.
+
+```
+> make clean
+> make run
+```
+
 ### Stack Overflows
 *yes, like the website*
 
@@ -757,14 +792,78 @@ Since we still use the small 64 byte stack, we must be careful not to overflow i
 
 ### Clearing the screen
 
-### Line wrapping 
+We might want to clear the screen before writing anything to it. 
 
-### Hello World using println
+To do so, we just need to add the following code to writer.rs
+
+```rust
+impl Writer {
+    ...
+    pub fn clear_screen(&mut self) {
+        for row in 0..BUFFER_HEIGHT{
+            self.clear_row(row);
+        }
+
+        self.column_position = 0;
+        self.row = 0;
+    }
+}
+```
+
+and 
+
+```rust
+pub fn clear_screen(){
+    WRITER.lock().clear_screen();
+}
+```
+
+to mod.rs
+
+The clear_screen in writer.rs is quite easy to understand: We call clear_row (which prints spaces in the entire row) on all rows on the screen and then reset prosition to the top left corner.
+
+The second clear_screen is a wrapper for the first one. We use WRITER the same way we use it for _print but instead we call the first clear_row.
+
+Adding this function (and its crate) to lib.rs gives the following:
+
+```rust
+#![feature(lang_items)]
+#![allow(internal_features)]
+#![no_std]
+
+use crate::vga_buffer::clear_screen;
+
+mod vga_buffer;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_init() {
+    clear_screen();
+    println!("Hello World{}", "!");
+}
+
+#[lang = "eh_personality"]
+pub extern "C" fn eh_personality() {}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+```
+
+After the usual
+
+```
+> make clean
+> make run
+```
+
+We have a clean screen with written "Hello World!".
+
+### Line wrapping 
 
 ### Deadlocks
 
 ### Fixing deadlocks
-
 
 # End of Post
 
