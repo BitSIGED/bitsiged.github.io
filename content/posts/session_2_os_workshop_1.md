@@ -415,7 +415,7 @@ We then want to update our start method to use the new stack
 section .text
 bits 32
 start: 
-    mov esp, stack_top ; add the top of the stack to the esp reg (remember stack grows down)
+    mov esp, boot_stack_top ; add the top of the stack to the esp reg (remember stack grows down)
     ; ... 
 ```
 
