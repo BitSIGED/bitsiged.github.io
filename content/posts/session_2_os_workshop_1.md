@@ -389,7 +389,7 @@ An entry in the P4, P3, P2 and P1 tables consist of the page aligned 52-bit *phy
 
 # Enabling long mode
 
-We will need to check the CPU we're running on has all the features we need, if not we should exit with a clear error message explaining the issue. To handle this we create a little error handler stub that accepts a error code in `al`
+We will need to check the CPU we're running on has all the features we need, if not we should exit with a clear error message explaining the issue. To handle this we create a little error handler stub that accepts a error code in `al` (the rest of the code in this tutorial goes to src/arch/x86_64/boot.asm unless stated otherwise)
 
 ```nasm
 ; parameter `al` contains the error code 
@@ -409,13 +409,16 @@ section .bss
 boot_stack_bottom:
     resb 64 ; reserve 64 bytes for the stack
 boot_stack_top:
+
+section .text
+; ...
 ```
 We then want to update our start method to use the new stack
 ```nasm
 section .text
 bits 32
 start: 
-    mov esp, stack_top ; add the top of the stack to the esp reg (remember stack grows down)
+    mov esp, boot_stack_top ; add the top of the stack to the esp reg (remember stack grows down)
     ; ... 
 ```
 
@@ -512,11 +515,9 @@ Now we know we can enter long mode we will need to set up an identity map so we 
 
 We start by setting aside some space for our page tables
 ```nasm
+global start
 
 P1_COUNT equ 4
-
-section .text
-; ...
 
 section .bss 
 align 4096
@@ -528,7 +529,9 @@ p2_table:
     resb 4096
 p1_tables:
     resb 4096 * P1_COUNT
-stack_bottom:
+
+boot_stack_bottom:
+; ...
 ```
 
 We then setup the first p4_table entry to point to the p3_table, and the first p3_table entry to point to p2_table
@@ -620,6 +623,9 @@ Finally the last requirement of long mode is the GDT which was a old segmentatio
 Don't worry to much about it now we will explain it later on, all we are doing for now is creating one code segment to allow us to execute code. We use `.rodata` as it is readonly 
 
 ```nasm
+; ...
+boot_stack_top
+
 section .rodata
 gdt64: ; long mode gdt
     dq 0 ; zero entry
@@ -628,15 +634,20 @@ gdt64: ; long mode gdt
 .pointer:
     dw $ - gdt64 - 1
     dq gdt64
+
+section .text
+; ...
 ```
 
 ## Putting it all together
 
 ```nasm
 global start
-extern long_mode_start
+extern long_mode_start ; --> Don't forget to add this new line 
 
 P1_COUNT equ 4
+
+; ... (bss and rodata here) 
 
 section .text
 bits 32
@@ -681,7 +692,7 @@ long_mode_start:
     mov qword [0xb8000], rax
     hlt
 ```
-Now you should be able to run the os and get OKAY printed to the screen 
+Now you should be able to run the os and get OKAY printed to the screen
 
 CONGRATS WE ARE NOW IN LONG MODE!
  
